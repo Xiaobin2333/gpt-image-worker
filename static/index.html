@@ -1,0 +1,3767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="page.title">GPT Image 面板</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeIn 0.4s ease-out both; }
+    .lightbox-shell {
+      width: min(1180px, calc(100vw - 32px));
+      height: min(820px, calc(100vh - 32px));
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+      overflow: hidden;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      background: #09090b;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.65);
+    }
+    .lightbox-media {
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(63, 63, 70, 0.16) 25%, transparent 25%) 0 0 / 28px 28px,
+        linear-gradient(135deg, transparent 75%, rgba(63, 63, 70, 0.1) 75%) 0 0 / 28px 28px,
+        #09090b;
+    }
+    .lightbox-stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .lightbox-stage[data-zoom="1"] { cursor: zoom-in; }
+    .lightbox-stage:not([data-zoom="1"]) { cursor: grab; }
+    .lightbox-stage.is-panning { cursor: grabbing; }
+    .lightbox-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 8px;
+      transform-origin: center center;
+      transform: translate3d(0, 0, 0) scale(1);
+      transition: transform 0.16s ease-out;
+      will-change: transform;
+      pointer-events: none;
+    }
+    .lightbox-stage.is-panning .lightbox-img,
+    .lightbox-stage.is-pinching .lightbox-img { transition: none; }
+    .lightbox-controls {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      background: rgba(9, 9, 11, 0.8);
+      border: 1px solid #27272a;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .lightbox-media:hover .lightbox-controls,
+    .lightbox-controls:focus-within { opacity: 1; }
+    .lightbox-controls button {
+      min-width: 36px;
+      height: 32px;
+      padding: 0 8px;
+      border-radius: 8px;
+      color: #d4d4d8;
+      font-size: 13px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: background-color 0.15s, color 0.15s;
+    }
+    .lightbox-controls button:hover { background: #27272a; color: #fafafa; }
+    .lightbox-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .lightbox-controls .lightbox-zoom-label {
+      min-width: 52px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      color: #a1a1aa;
+    }
+    .lightbox-details {
+      min-width: 0;
+      border-left: 1px solid #27272a;
+      background: rgba(24, 24, 27, 0.96);
+    }
+    @media (max-width: 900px) {
+      .lightbox-shell {
+        height: min(860px, calc(100vh - 32px));
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 58%) minmax(280px, 42%);
+      }
+      .lightbox-details {
+        border-left: 0;
+        border-top: 1px solid #27272a;
+      }
+    }
+    textarea::placeholder { color: #52525b; }
+    input::placeholder { color: #52525b; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #18181b; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+    .settings-section {
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      background: rgba(24, 24, 27, 0.55);
+      overflow: hidden;
+    }
+    .settings-section[open] { background: rgba(24, 24, 27, 0.85); }
+    .settings-summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      transition: background-color 0.15s;
+    }
+    .settings-summary::-webkit-details-marker { display: none; }
+    .settings-summary:hover { background: rgba(63, 63, 70, 0.35); }
+    .settings-summary-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+    }
+    .settings-summary-title {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e4e4e7;
+    }
+    .settings-summary-badge {
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .settings-summary-caret {
+      color: #71717a;
+      transition: transform 0.2s;
+    }
+    .settings-section[open] .settings-summary-caret { transform: rotate(90deg); }
+    .settings-section-body {
+      padding: 4px 14px 14px;
+      border-top: 1px solid #27272a;
+    }
+    .settings-input {
+      width: 100%;
+      background: #18181b;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13.5px;
+      color: #fafafa;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .settings-input::placeholder { color: #52525b; }
+    .settings-input:focus {
+      outline: none;
+      border-color: #10b981;
+      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+    }
+    .gallery-card { position: relative; transition: transform 0.2s, box-shadow 0.2s; }
+    .gallery-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+    .gallery-select-handle {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 5;
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: rgba(9, 9, 11, 0.78);
+      border: 1.5px solid rgba(228, 228, 231, 0.55);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: transparent;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s, background-color 0.15s, border-color 0.15s, color 0.15s;
+      backdrop-filter: blur(6px);
+    }
+    .gallery-card:hover .gallery-select-handle,
+    body.has-selection .gallery-select-handle { opacity: 1; }
+    .gallery-select-handle:hover { border-color: #10b981; }
+    .gallery-card.is-selected .gallery-select-handle {
+      opacity: 1;
+      background: #10b981;
+      border-color: #10b981;
+      color: white;
+    }
+    .gallery-card.is-selected {
+      outline: 2px solid #10b981;
+      outline-offset: -2px;
+    }
+    .drawer-backdrop { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+    .progress-bar { animation: indeterminate 1.5s ease-in-out infinite; }
+    .preview-empty {
+      background:
+        linear-gradient(135deg, rgba(63, 63, 70, 0.18) 25%, transparent 25%) 0 0 / 28px 28px,
+        linear-gradient(135deg, transparent 75%, rgba(63, 63, 70, 0.14) 75%) 0 0 / 28px 28px,
+        rgba(39, 39, 42, 0.72);
+    }
+    #referenceDropzone.is-drag-over {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.12);
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translate(-50%, 16px); }
+      to   { opacity: 1; transform: translate(-50%, 0); }
+    }
+    .slide-up { animation: slideUp 0.25s ease-out both; }
+    @keyframes flashAttention {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(244, 114, 182, 0); }
+      30%      { box-shadow: 0 0 0 6px rgba(244, 114, 182, 0.55); }
+      60%      { box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.35); }
+    }
+    .flash-attention {
+      border-radius: 10px;
+      animation: flashAttention 1.6s ease-out;
+    }
+    .preview-thumb { 
+      width: 64px;
+      height: 64px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      background: #18181b;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .preview-thumb:hover { transform: translateY(-1px); border-color: #3f3f46; }
+    .preview-thumb.is-active { border-color: #10b981; box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.45); }
+    .preview-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .preview-zoom-stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .preview-zoom-stage[data-zoom="1"] { cursor: zoom-in; }
+    .preview-zoom-stage:not([data-zoom="1"]) { cursor: grab; }
+    .preview-zoom-stage.is-panning { cursor: grabbing; }
+    .preview-zoom-stage img.zoom-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      transform-origin: center center;
+      transform: translate3d(0, 0, 0) scale(1);
+      transition: transform 0.16s ease-out;
+      will-change: transform;
+      pointer-events: none;
+    }
+    .preview-zoom-stage.is-panning img.zoom-img,
+    .preview-zoom-stage.is-pinching img.zoom-img { transition: none; }
+    .preview-zoom-controls {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      background: rgba(9, 9, 11, 0.78);
+      border: 1px solid #27272a;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      opacity: 0.85;
+      transition: opacity 0.2s;
+      z-index: 2;
+    }
+    #previewImageWrapper:hover .preview-zoom-controls,
+    .preview-zoom-controls:focus-within { opacity: 1; }
+    .preview-zoom-controls button {
+      min-width: 36px;
+      height: 30px;
+      padding: 0 8px;
+      border-radius: 8px;
+      color: #d4d4d8;
+      font-size: 13px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: background-color 0.15s, color 0.15s;
+    }
+    .preview-zoom-controls button:hover { background: #27272a; color: #fafafa; }
+    .preview-zoom-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .preview-zoom-controls .zoom-label {
+      min-width: 44px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      color: #a1a1aa;
+    }
+    .size-dialog-backdrop {
+      background: rgba(9, 9, 11, 0.72);
+      backdrop-filter: blur(8px);
+    }
+    .size-panel {
+      background:
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 36%),
+        #18181b;
+    }
+    .size-tab,
+    .size-choice {
+      border: 1px solid #3f3f46;
+      color: #a1a1aa;
+      background: rgba(39, 39, 42, 0.55);
+      transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+    }
+    .size-tab:hover,
+    .size-choice:hover {
+      border-color: #52525b;
+      color: #f4f4f5;
+      background: rgba(39, 39, 42, 0.9);
+    }
+    .size-tab.active,
+    .size-choice.active {
+      border-color: #10b981;
+      color: #ecfdf5;
+      background: rgba(16, 185, 129, 0.14);
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+    }
+    @keyframes indeterminate {
+      0%   { transform: translateX(-100%) scaleX(0.5); }
+      50%  { transform: translateX(0%)   scaleX(0.5); width: 50%; }
+      100% { transform: translateX(200%) scaleX(0.5); }
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+  <div id="accessGate" class="fixed inset-0 z-[100] hidden bg-zinc-950 flex items-center justify-center px-4">
+    <div class="w-full max-w-sm border border-zinc-800 rounded-2xl bg-zinc-900/80 p-6 shadow-2xl fade-in">
+      <div class="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center mb-5">
+        <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H3v-4l6.257-6.257A6 6 0 1121 9z"/>
+        </svg>
+      </div>
+      <h2 class="text-lg font-semibold text-zinc-100" data-i18n="access.title">访问密钥</h2>
+      <p class="mt-1 text-sm text-zinc-500" data-i18n="access.subtitle">本站点已开启访问保护，请输入访问密钥继续。</p>
+      <form class="mt-5 space-y-4" onsubmit="unlockAccess(event)">
+        <input type="password" id="accessKeyInput" autocomplete="current-password" data-i18n-attr="placeholder:access.placeholder" placeholder="请输入访问密钥"
+          class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors font-mono">
+        <button id="accessKeyBtn" type="submit"
+          class="w-full px-4 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors" data-i18n="access.unlock">
+          解锁
+        </button>
+      </form>
+      <p id="accessKeyError" class="hidden mt-3 text-sm text-red-400"></p>
+    </div>
+  </div>
+
+  <div id="adminModal" class="fixed inset-0 z-[90] hidden">
+    <div class="drawer-backdrop absolute inset-0" onclick="closeAdminModal()"></div>
+    <div class="relative flex items-center justify-center h-full p-4">
+      <div class="w-full max-w-sm border border-zinc-800 rounded-2xl bg-zinc-900/95 p-6 shadow-2xl fade-in">
+        <div class="flex items-start justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-lg font-semibold text-zinc-100" data-i18n="admin.title">管理员登录</h2>
+              <p class="text-xs text-zinc-500" data-i18n="admin.subtitle">登录后可编辑设置、查看全部图库</p>
+            </div>
+          </div>
+          <button onclick="closeAdminModal()" class="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <form class="space-y-4" onsubmit="loginAdmin(event)">
+          <input type="password" id="adminKeyInput" autocomplete="current-password" data-i18n-attr="placeholder:admin.placeholder" placeholder="请输入管理员密钥"
+            class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30 transition-colors font-mono">
+          <button id="adminKeyBtn" type="submit"
+            class="w-full px-4 py-3 rounded-xl bg-amber-600 text-white text-sm font-semibold hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors" data-i18n="admin.login">
+            登录
+          </button>
+        </form>
+        <p id="adminKeyError" class="hidden mt-3 text-sm text-red-400"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="border-b border-zinc-800 sticky top-0 z-40 bg-zinc-950/80 backdrop-blur-md">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center">
+          <svg class="w-4 h-4 text-zinc-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-base font-semibold text-zinc-100" data-i18n="header.title">GPT Image 面板</h1>
+          <p class="text-xs text-zinc-500 hidden sm:block" data-i18n="header.subtitle">图像生成界面</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="langToggleBtn" onclick="toggleLanguage()" class="px-2.5 py-1.5 rounded-lg border border-zinc-800 text-xs font-semibold text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n-attr="title:header.toggleLanguage" title="切换语言">
+          <span id="langToggleLabel">EN</span>
+        </button>
+        <button id="adminLoginBtn" onclick="openAdminModal()" class="hidden p-2 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n-attr="title:header.adminLogin" title="管理员登录">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+          </svg>
+        </button>
+        <button id="adminLogoutBtn" onclick="logoutAdmin()" class="hidden p-2 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-zinc-800 transition-colors" data-i18n-attr="title:header.adminLogout" title="退出管理员">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+          </svg>
+        </button>
+        <button id="settingsBtn" onclick="toggleSettings()" class="hidden p-2 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n-attr="title:header.settings" title="设置">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Settings Drawer -->
+  <div id="settingsDrawer" class="fixed inset-0 z-50 hidden">
+    <div class="drawer-backdrop absolute inset-0" onclick="toggleSettings()"></div>
+    <div class="absolute right-0 top-0 h-full w-full max-w-md bg-zinc-900 border-l border-zinc-800 shadow-2xl flex flex-col fade-in">
+      <div class="p-5 border-b border-zinc-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-zinc-100" data-i18n="settings.title">设置</h2>
+        <button onclick="toggleSettings()" class="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="p-4 space-y-3 flex-1 overflow-y-auto">
+
+        <details class="settings-section" open>
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupApi">上游 API</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.apiUrl">API Base URL</label>
+              <input type="url" id="settingsApiUrl" placeholder="https://api.example.com"
+                class="settings-input font-mono">
+              <p class="mt-1.5 text-xs text-zinc-500" data-i18n="settings.apiUrlHint">不包含 API Path 的根地址</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.apiPath">API Path</label>
+              <select id="settingsApiPath" class="settings-input font-mono cursor-pointer appearance-none">
+                <option value="/v1/images/generations">/v1/images/generations</option>
+                <option value="/v1/responses">/v1/responses</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.apiKey">API Key</label>
+              <input type="password" id="settingsApiKey" placeholder="sk-..." class="settings-input font-mono">
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-section">
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupAccess">访问保护</span>
+            <span id="settingsAccessBadge" class="settings-summary-badge hidden" data-i18n="settings.badgeOn">已启用</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-4">
+            <label class="flex items-start gap-3 cursor-pointer select-none">
+              <input id="settingsLockEnabled" type="checkbox" class="mt-0.5 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500/30">
+              <div class="flex-1">
+                <span class="block text-sm font-medium text-zinc-200" data-i18n="settings.accessEnable">启用访问密钥</span>
+                <span class="block text-xs text-zinc-500 mt-0.5" data-i18n="settings.accessHint">开启后所有访客必须先输入密钥才能访问站点</span>
+              </div>
+            </label>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.accessKey">访问密钥</label>
+              <input type="password" id="settingsAccessKey" data-i18n-attr="placeholder:settings.accessKeyPlaceholder" placeholder="留空保留当前密钥" class="settings-input font-mono">
+              <p id="settingsAccessKeyState" class="mt-1.5 text-xs text-zinc-500"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-section">
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupCaptcha">人机验证</span>
+            <span id="settingsTurnstileBadge" class="settings-summary-badge hidden" data-i18n="settings.badgeOn">已启用</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-4">
+            <label class="flex items-start gap-3 cursor-pointer select-none">
+              <input id="settingsTurnstileEnabled" type="checkbox" class="mt-0.5 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500/30">
+              <div class="flex-1">
+                <span class="block text-sm font-medium text-zinc-200" data-i18n="settings.turnstileEnable">启用 Cloudflare Turnstile</span>
+                <span class="block text-xs text-zinc-500 mt-0.5" data-i18n="settings.turnstileHint">开启后非管理员用户每次生成都需通过验证。请到 Cloudflare 后台 → Turnstile 创建小部件获取密钥。</span>
+              </div>
+            </label>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.turnstileSiteKey">Site Key</label>
+              <input type="text" id="settingsTurnstileSiteKey" placeholder="0x4AAAAAAA..." class="settings-input font-mono">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.turnstileSecret">Secret Key</label>
+              <input type="password" id="settingsTurnstileSecret" data-i18n-attr="placeholder:settings.turnstileSecretPlaceholder" placeholder="留空保留当前密钥" class="settings-input font-mono">
+              <p id="settingsTurnstileSecretState" class="mt-1.5 text-xs text-zinc-500"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="settings-section">
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupRateLimit">速率限制</span>
+            <span id="settingsRateLimitBadge" class="settings-summary-badge hidden" data-i18n="settings.badgeOn">已启用</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-4">
+            <label class="flex items-start gap-3 cursor-pointer select-none">
+              <input id="settingsRateLimitEnabled" type="checkbox" class="mt-0.5 w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500/30">
+              <div class="flex-1">
+                <span class="block text-sm font-medium text-zinc-200" data-i18n="settings.rateLimitEnable">按 IP 限制生成速率</span>
+                <span class="block text-xs text-zinc-500 mt-0.5" data-i18n="settings.rateLimitHint">每个访客在指定时间窗口内最多发起 N 次生成。管理员不受限制。</span>
+              </div>
+            </label>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.rateLimitLimit">最大次数</label>
+                <input type="number" id="settingsRateLimitLimit" min="1" max="1000" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.rateLimitLimit">范围 1 – 1000</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.rateLimitWindow">时间窗口（秒）</label>
+                <input type="number" id="settingsRateLimitWindow" min="1" max="86400" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.rateLimitWindow">范围 1 – 86400（24 小时）</p>
+              </div>
+            </div>
+            <p class="text-xs text-zinc-500" id="settingsRateLimitSummary"></p>
+          </div>
+        </details>
+
+        <details class="settings-section">
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 10h18M3 6h18M3 14h12M3 18h8"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupLimits">运行参数</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.r2Domain">R2 公开域名</label>
+              <input type="text" id="settingsR2Domain" placeholder="gpt-img.example.com" class="settings-input font-mono">
+              <p class="mt-1.5 text-xs text-zinc-500" data-i18n="settings.r2DomainHint">公开图片直接走 R2 域名，绕过 Worker。留空则全部经 Worker。</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.promptMax">Prompt 最大字符</label>
+                <input type="number" id="settingsPromptMax" min="100" max="20000" step="50" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.promptMax">范围 100 – 20000，默认 4000</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.generationMaxN">单次最大生成数 n</label>
+                <input type="number" id="settingsGenerationMaxN" min="1" max="20" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.generationMaxN">范围 1 – 20（管理员不受限制，仍按 20 上限）</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.referenceMaxCount">参考图最大数量</label>
+                <input type="number" id="settingsReferenceMaxCount" min="0" max="16" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.referenceMaxCount">范围 0 – 16（0 表示禁用图生图）</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.referenceMaxMb">单张参考图最大 (MB)</label>
+                <input type="number" id="settingsReferenceMaxMb" min="1" max="50" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.referenceMaxMb">范围 1 – 50 MB</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.maxFileSizeMb">单张生成图最大 (MB)</label>
+                <input type="number" id="settingsMaxFileSizeMb" min="1" max="100" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.maxFileSizeMb">范围 1 – 100 MB</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.responsesModel">/v1/responses 模型</label>
+                <input type="text" id="settingsResponsesModel" placeholder="gpt-5.4" class="settings-input font-mono">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.responsesModel">仅在 API 路径为 /v1/responses 时使用</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.accessSessionMinutes">访问会话时长 (分钟)</label>
+                <input type="number" id="settingsAccessSessionMin" min="5" max="10080" step="5" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.sessionMinutes">范围 5 – 10080（最长 7 天）</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.adminSessionMinutes">管理员会话时长 (分钟)</label>
+                <input type="number" id="settingsAdminSessionMin" min="5" max="10080" step="5" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.sessionMinutes">范围 5 – 10080（最长 7 天）</p>
+              </div>
+            </div>
+            <p class="text-xs text-zinc-500" data-i18n="settings.limitsHint">超出范围会自动夹取到合法区间；保存后立即对前后端生效。</p>
+          </div>
+        </details>
+
+        <details class="settings-section">
+          <summary class="settings-summary">
+            <span class="settings-summary-icon">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M4 7h16"/></svg>
+            </span>
+            <span class="settings-summary-title" data-i18n="settings.groupMaintenance">维护</span>
+            <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </summary>
+          <div class="settings-section-body space-y-3">
+            <p class="text-xs text-zinc-500" data-i18n="settings.cleanupHint">清理 R2 中没有图库记录引用的孤儿图片（10 分钟前的对象才会被扫描）</p>
+            <button id="cleanupOrphansBtn" type="button" onclick="cleanupOrphans()"
+              class="w-full px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-200 text-sm font-medium hover:bg-zinc-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-i18n="settings.cleanupButton">清理孤儿图片</button>
+          </div>
+        </details>
+
+      </div>
+      <div class="p-4 border-t border-zinc-800 flex gap-3">
+        <button onclick="toggleSettings()" class="flex-1 px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-300 text-sm font-medium hover:bg-zinc-800 transition-colors" data-i18n="common.cancel">取消</button>
+        <button onclick="saveSettings()" class="flex-1 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 transition-colors" data-i18n="common.save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-lg text-sm font-medium shadow-xl transition-all duration-300 opacity-0 translate-y-2 pointer-events-none">
+  </div>
+
+  <!-- Gallery Selection Floating Bar -->
+  <div id="galleryBatchBar" class="hidden fixed bottom-6 left-1/2 z-40 slide-up" style="transform: translateX(-50%);">
+    <div class="flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/95 backdrop-blur-md px-3 py-2 shadow-2xl shadow-black/50">
+      <span class="inline-flex items-center justify-center min-w-[28px] h-7 px-2 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-semibold">
+        <span id="gallerySelectedCount">0</span>
+      </span>
+      <button type="button" onclick="toggleGallerySelectAll()" class="px-3 py-1.5 rounded-full text-xs font-medium text-zinc-300 hover:bg-zinc-800 transition-colors" data-i18n="gallery.selectAll">本页全选</button>
+      <span class="w-px h-5 bg-zinc-800"></span>
+      <button type="button" onclick="batchDeleteSelected()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-600 text-white text-xs font-medium hover:bg-red-500 transition-colors">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        <span data-i18n="gallery.batchDelete">批量删除</span>
+      </button>
+      <button type="button" onclick="clearGallerySelection()" class="p-1.5 rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n-attr="title:gallery.exitSelect" title="退出多选">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Error Banner -->
+  <div id="errorBanner" class="hidden max-w-5xl mx-auto px-4 sm:px-6 mt-4">
+    <div class="bg-red-900/30 border border-red-800/60 rounded-lg px-4 py-3 flex items-start gap-3">
+      <svg class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <div class="flex-1 min-w-0">
+        <p id="errorText" class="text-sm text-red-300"></p>
+      </div>
+      <button onclick="hideError()" class="p-0.5 text-red-400 hover:text-red-300">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+
+    <section class="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 sm:p-6">
+      <h2 class="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-5" data-i18n="generate.heading">生成图像</h2>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.prompt">提示词</label>
+          <textarea id="promptInput" rows="4" data-i18n-attr="placeholder:generate.promptPlaceholder" placeholder="一只赛博朋克狐狸站在霓虹灯下的雨夜街头，电影感，超精细..."
+            class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors resize-none leading-relaxed"></textarea>
+          <div class="flex justify-end mt-1.5">
+            <span id="promptLen" class="text-xs text-zinc-600">0 / 4000</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-sm font-medium text-zinc-300"><span data-i18n="generate.referenceImages">参考图</span> <span id="referenceHint" class="text-xs text-zinc-500 font-normal"></span></label>
+            <button type="button" id="referenceClearBtn" onclick="clearReferenceImages()" class="hidden text-xs text-zinc-400 hover:text-zinc-200" data-i18n="common.clear">清空</button>
+          </div>
+          <div id="referenceDropzone" class="border border-dashed border-zinc-700 rounded-xl p-3 bg-zinc-800/40">
+            <div id="referencePreviews" class="flex flex-wrap gap-2 mb-2 hidden"></div>
+            <label class="flex items-center justify-center gap-2 text-sm text-zinc-400 hover:text-zinc-200 cursor-pointer py-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4v16m8-8H4"/>
+              </svg>
+              <span data-i18n="generate.addReference">添加参考图</span>
+              <input type="file" id="referenceFileInput" accept="image/png,image/jpeg,image/webp" multiple class="hidden" onchange="handleReferenceFiles(event)">
+            </label>
+          </div>
+          <p id="referenceTip" class="mt-1.5 text-xs text-zinc-500"></p>
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-4">
+          <div class="flex-1">
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.size">图像尺寸</label>
+            <button id="sizeSelect" type="button" value="auto" onclick="openSizeDialog()"
+              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-left text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+              <span class="flex items-center justify-between gap-3">
+                <span class="min-w-0">
+                  <span id="sizeSelectLabel" class="block font-medium truncate">auto</span>
+                  <span id="sizeSelectMeta" class="block text-xs text-zinc-500 truncate">Auto</span>
+                </span>
+                <svg class="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6"/>
+                </svg>
+              </span>
+            </button>
+          </div>
+          <div class="flex-1">
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.model">模型</label>
+            <select id="modelSelect" class="w-full min-h-[62px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+              <option value="gpt-image-2">gpt-image-2</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.quality">质量</label>
+            <select id="qualitySelect" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+              <option value="auto" data-i18n="quality.auto">自动</option>
+              <option value="low" data-i18n="quality.low">低</option>
+              <option value="medium" data-i18n="quality.medium">中</option>
+              <option value="high" data-i18n="quality.high">高</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.format">格式</label>
+            <select id="formatSelect" onchange="handleOutputFormatChange()" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+              <option value="png">PNG</option>
+              <option value="jpeg">JPEG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.compression">压缩</label>
+            <input id="compressionInput" type="number" min="0" max="100" step="1" value="" data-i18n-attr="placeholder:generate.compressionDisabled" placeholder="PNG 不可用" disabled
+              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.quantity">数量</label>
+            <input id="quantityInput" type="number" min="1" max="10" step="1" value="1"
+              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+          </div>
+        </div>
+
+        <div class="flex flex-col sm:flex-row sm:items-center gap-4">
+          <button id="generateBtn" onclick="generateImage()"
+            class="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            <span data-i18n="generate.action">生成</span>
+          </button>
+          <label class="flex items-center gap-2 text-sm text-zinc-300 select-none cursor-pointer">
+            <input id="publicToggle" type="checkbox" checked class="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500/30">
+            <span data-i18n="generate.public">公开到图库</span>
+          </label>
+          <span class="text-xs text-zinc-500" data-i18n="generate.privateHint">未勾选则仅本浏览器可见</span>
+        </div>
+        <div id="turnstileContainer" class="hidden"></div>
+      </div>
+    </section>
+
+    <section id="previewSection" class="hidden bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 sm:p-6">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-sm font-semibold text-zinc-400 uppercase tracking-wider" data-i18n="preview.heading">预览</h2>
+        <div class="flex gap-2">
+          <button id="downloadBtn" onclick="downloadCurrent()"
+            class="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-xs font-medium hover:bg-zinc-700 transition-colors flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span data-i18n="common.download">下载</span>
+          </button>
+          <button id="regenerateBtn" onclick="regenerate()"
+            class="px-4 py-2 rounded-lg bg-emerald-600/20 text-emerald-400 text-xs font-medium hover:bg-emerald-600/30 transition-colors flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span data-i18n="preview.regenerate">重新生成</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="previewImageWrapper" class="preview-empty relative rounded-xl overflow-hidden min-h-48 h-[500px]">
+        <div id="previewStage" class="preview-zoom-stage" data-zoom="1">
+          <img id="previewImage" alt="" class="hidden zoom-img">
+        </div>
+        <div id="previewControls" class="preview-zoom-controls hidden" role="toolbar" aria-label="Preview controls">
+          <button type="button" id="previewZoomOut" onclick="zoomOutPreview()" data-i18n-attr="title:lightbox.zoomOut" title="缩小">−</button>
+          <button type="button" id="previewZoomReset" onclick="resetZoomPreview()" data-i18n-attr="title:lightbox.zoomFit" title="适应">
+            <span id="previewZoomLabel" class="zoom-label">100%</span>
+          </button>
+          <button type="button" id="previewZoomIn" onclick="zoomInPreview()" data-i18n-attr="title:lightbox.zoomIn" title="放大">+</button>
+          <button type="button" id="previewZoom100" onclick="setZoomPreview(1)" data-i18n-attr="title:lightbox.zoomActual" title="原始大小">1:1</button>
+        </div>
+        <div id="previewLoading" class="absolute inset-0 flex items-center justify-center bg-zinc-900/70 backdrop-blur-sm hidden">
+          <div class="text-center">
+            <div class="spinner mx-auto mb-4" style="width:32px;height:32px;border-width:3px;"></div>
+            <p id="previewLoadingText" class="text-sm font-medium text-zinc-200" data-i18n="preview.generating">生成中...</p>
+            <div class="w-48 h-1 bg-zinc-700/80 rounded-full mt-4 overflow-hidden">
+              <div class="h-full bg-emerald-500 rounded-full progress-bar"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="previewThumbs" class="hidden mt-3 flex flex-wrap gap-2"></div>
+      <div class="mt-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <p id="previewPrompt" class="text-sm text-zinc-500 truncate"></p>
+        <p id="previewTime" class="hidden text-xs text-zinc-600 sm:flex-shrink-0"></p>
+      </div>
+    </section>
+
+    <section>
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-sm font-semibold text-zinc-400 uppercase tracking-wider" data-i18n="gallery.heading">图库</h2>
+        <div class="flex items-center gap-3">
+          <div id="galleryScopeWrap" class="hidden inline-flex rounded-lg border border-zinc-800 bg-zinc-900/70 p-0.5 text-xs">
+            <button type="button" data-scope="default" onclick="setGalleryScope('default')" class="gallery-scope-btn px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-100" data-i18n="gallery.scope.default">默认</button>
+            <button type="button" data-scope="all" onclick="setGalleryScope('all')" class="gallery-scope-btn px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-100" data-i18n="gallery.scope.all">全部</button>
+          </div>
+          <span id="galleryCount" class="text-xs text-zinc-600"></span>
+        </div>
+      </div>
+
+      <div id="galleryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- Cards injected here -->
+      </div>
+
+      <div id="galleryPagination" class="hidden mt-5 flex items-center justify-center gap-3">
+        <button id="galleryPrevBtn" type="button" onclick="changeGalleryPage(-1)"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:bg-zinc-900/70 disabled:hover:text-zinc-400">
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          <span data-i18n="gallery.prev">上一页</span>
+        </button>
+        <span id="galleryPageInfo"
+          class="min-w-[88px] rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-center text-xs font-medium text-zinc-500">第 1 / 1 页</span>
+        <button id="galleryNextBtn" type="button" onclick="changeGalleryPage(1)"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-800 disabled:hover:bg-zinc-900/70 disabled:hover:text-zinc-400">
+          <span data-i18n="gallery.next">下一页</span>
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="galleryEmpty" class="hidden">
+        <div class="flex flex-col items-center py-16 px-8">
+          <div class="relative mb-6">
+            <div class="absolute inset-0 bg-emerald-500/10 rounded-full blur-xl scale-125"></div>
+            <div class="relative w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+              <svg class="w-9 h-9 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+              </svg>
+              <div class="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+          <h3 class="text-base font-semibold text-zinc-300 mb-1.5" data-i18n="gallery.emptyTitle">图库还是空的</h3>
+          <p class="text-sm text-zinc-500 max-w-xs text-center leading-relaxed" data-i18n="gallery.emptyDesc">描述你想要创作的画面，点击「生成」开始</p>
+          <div class="mt-6 flex items-center gap-1.5 text-xs text-zinc-600">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+            </svg>
+            <span data-i18n="gallery.emptyHint">试试这样的提示："清晨阳光下的宁静山间湖泊"</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="fixed inset-0 z-50 hidden">
+    <div class="drawer-backdrop absolute inset-0" onclick="closeLightbox()"></div>
+    <div class="relative flex items-center justify-center h-full p-4">
+      <div class="lightbox-shell fade-in">
+        <div class="lightbox-media">
+          <div id="lightboxStage" class="lightbox-stage" data-zoom="1">
+            <img id="lightboxImg" src="" alt="" class="lightbox-img">
+          </div>
+          <div class="lightbox-controls" role="toolbar" aria-label="Image controls">
+            <button type="button" id="lightboxZoomOut" onclick="zoomOutLightbox()" data-i18n-attr="title:lightbox.zoomOut" title="缩小">−</button>
+            <button type="button" id="lightboxZoomReset" onclick="resetZoomLightbox()" data-i18n-attr="title:lightbox.zoomFit" title="适应">
+              <span id="lightboxZoomLabel" class="lightbox-zoom-label">100%</span>
+            </button>
+            <button type="button" id="lightboxZoomIn" onclick="zoomInLightbox()" data-i18n-attr="title:lightbox.zoomIn" title="放大">+</button>
+            <button type="button" id="lightboxZoom100" onclick="setZoomLightbox(1)" data-i18n-attr="title:lightbox.zoomActual" title="原始大小">1:1</button>
+          </div>
+        </div>
+        <aside class="lightbox-details flex flex-col min-h-0">
+          <div class="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+            <div class="min-w-0">
+              <h2 class="text-sm font-semibold uppercase tracking-wider text-zinc-400" data-i18n="lightbox.heading">生成详情</h2>
+              <p id="lightboxCreatedAt" class="mt-1 text-xs text-zinc-600 truncate"></p>
+            </div>
+            <button onclick="closeLightbox()" class="p-2 rounded-lg bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 transition-colors" data-i18n-attr="aria-label:lightbox.close" aria-label="关闭预览">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex-1 min-h-0 overflow-y-auto px-5 py-5 space-y-5">
+            <div>
+              <div class="flex items-center justify-between gap-3 mb-2">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500" data-i18n="lightbox.prompt">提示词</h3>
+                <div class="flex items-center gap-2">
+                  <button type="button" onclick="editFromLightbox()"
+                    class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-xs font-medium hover:bg-emerald-600/30 transition-colors" data-i18n="lightbox.edit">
+                    编辑此图
+                  </button>
+                  <button type="button" onclick="copyLightboxPrompt(event)"
+                    class="px-2.5 py-1.5 rounded-lg bg-zinc-800 text-xs font-medium text-zinc-300 hover:bg-zinc-700 transition-colors" data-i18n="common.copy">
+                    复制
+                  </button>
+                </div>
+              </div>
+              <p id="lightboxPrompt" class="whitespace-pre-wrap break-words rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-sm leading-6 text-zinc-200"></p>
+            </div>
+
+            <div>
+              <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500" data-i18n="lightbox.parameters">参数</h3>
+              <dl id="lightboxParams" class="grid grid-cols-1 gap-2"></dl>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Size Dialog -->
+  <div id="sizeDialog" class="fixed inset-0 z-50 hidden">
+    <div class="size-dialog-backdrop absolute inset-0" onclick="closeSizeDialog()"></div>
+    <div class="relative min-h-full flex items-center justify-center p-4">
+      <div class="size-panel w-full max-w-xl max-h-[92vh] overflow-y-auto border border-zinc-800 rounded-2xl shadow-2xl fade-in">
+        <div class="p-5 sm:p-6 border-b border-zinc-800 flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-xl font-semibold text-zinc-100" data-i18n="size.dialogTitle">设置图像尺寸</h2>
+            <p class="mt-1 text-sm text-zinc-500"><span data-i18n="size.current">当前：</span><span id="sizeCurrentValue" class="font-medium text-zinc-400">1024 x 1024</span></p>
+          </div>
+          <button type="button" onclick="closeSizeDialog()"
+            class="p-2 rounded-lg text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n-attr="aria-label:size.dialogTitle" aria-label="设置图像尺寸">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-5 sm:p-6 space-y-6">
+          <div class="grid grid-cols-3 gap-2 rounded-xl bg-zinc-950/50 p-1">
+            <button type="button" data-size-tab="auto" onclick="selectSizeMode('auto')" class="size-tab rounded-lg px-3 py-3 text-sm font-semibold" data-i18n="size.tab.auto">自动</button>
+            <button type="button" data-size-tab="ratio" onclick="selectSizeMode('ratio')" class="size-tab rounded-lg px-3 py-3 text-sm font-semibold" data-i18n="size.tab.ratio">比例</button>
+            <button type="button" data-size-tab="custom" onclick="selectSizeMode('custom')" class="size-tab rounded-lg px-3 py-3 text-sm font-semibold" data-i18n="size.tab.custom">自定义</button>
+          </div>
+
+          <div id="sizeAutoPanel" class="hidden min-h-64 flex flex-col items-center justify-center text-center">
+            <div class="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-5">
+              <svg class="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 3L4 14h7l-1 7 10-12h-7l0-6z"/>
+              </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-zinc-100" data-i18n="size.autoTitle">自动尺寸</h3>
+            <p class="mt-2 max-w-xs text-sm leading-6 text-zinc-500" data-i18n="size.autoDesc">传入 auto，由模型根据提示词与能力自动选择输出尺寸。</p>
+          </div>
+
+          <div id="sizeRatioPanel" class="hidden space-y-5">
+            <div>
+              <p class="text-sm font-medium text-zinc-400 mb-3" data-i18n="size.baseLabel">基础分辨率</p>
+              <div class="grid grid-cols-3 gap-3">
+                <button type="button" data-size-base="1K" onclick="selectSizeBase('1K')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">1K</button>
+                <button type="button" data-size-base="2K" onclick="selectSizeBase('2K')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">2K</button>
+                <button type="button" data-size-base="4K" onclick="selectSizeBase('4K')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">4K</button>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm font-medium text-zinc-400 mb-3" data-i18n="size.ratioLabel">宽高比</p>
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <button type="button" data-size-ratio="1:1" onclick="selectSizeRatio('1:1')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">1:1</button>
+                <button type="button" data-size-ratio="4:3" onclick="selectSizeRatio('4:3')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">4:3</button>
+                <button type="button" data-size-ratio="3:4" onclick="selectSizeRatio('3:4')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">3:4</button>
+                <button type="button" data-size-ratio="16:9" onclick="selectSizeRatio('16:9')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">16:9</button>
+                <button type="button" data-size-ratio="9:16" onclick="selectSizeRatio('9:16')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">9:16</button>
+                <button type="button" data-size-ratio="21:9" onclick="selectSizeRatio('21:9')" class="size-choice rounded-xl px-3 py-3 text-sm font-semibold">21:9</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="sizeCustomPanel" class="hidden space-y-5">
+            <div>
+              <p class="text-sm font-medium text-zinc-400 mb-3" data-i18n="size.customLabel">输入精确像素值</p>
+              <div class="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+                <label class="block" for="customWidthInput">
+                  <span class="block text-sm text-zinc-500 mb-2" data-i18n="size.width">宽</span>
+                  <input id="customWidthInput" type="text" inputmode="numeric" autocomplete="off" value="1024"
+                    oninput="handleCustomSizeInput('width', this.value)"
+                    class="w-full bg-zinc-950/60 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+                </label>
+                <span class="pb-3 text-xl text-zinc-600">×</span>
+                <label class="block" for="customHeightInput">
+                  <span class="block text-sm text-zinc-500 mb-2" data-i18n="size.height">高</span>
+                  <input id="customHeightInput" type="text" inputmode="numeric" autocomplete="off" value="1024"
+                    oninput="handleCustomSizeInput('height', this.value)"
+                    class="w-full bg-zinc-950/60 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+                </label>
+              </div>
+            </div>
+            <div class="flex gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-100">
+              <svg class="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <p data-i18n="size.customNote">会自动校正：宽高均需为 16 的倍数，最大边 3840px，最大宽高比 3:1，总像素 655360 - 8294400。</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-zinc-950/45 border border-zinc-800 p-4">
+            <p class="text-sm font-medium text-zinc-500" data-i18n="size.willUse">将使用</p>
+            <div class="mt-2 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+              <p id="sizeResultValue" class="font-mono text-2xl font-semibold text-zinc-100">1024x1024</p>
+              <p id="sizeResultMeta" class="text-sm text-zinc-500">Ratio · 1K · 1:1</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-5 sm:p-6 border-t border-zinc-800 grid grid-cols-2 gap-3">
+          <button type="button" onclick="closeSizeDialog()"
+            class="px-4 py-3 rounded-xl bg-zinc-800 text-zinc-300 text-sm font-semibold hover:bg-zinc-700 transition-colors" data-i18n="common.cancel">取消</button>
+          <button type="button" onclick="applySizeDialog()"
+            class="px-4 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition-colors" data-i18n="size.confirm">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const I18N = {
+      zh: {
+        'page.title': 'GPT Image 面板',
+        'header.title': 'GPT Image 面板',
+        'header.subtitle': '图像生成界面',
+        'header.toggleLanguage': '切换语言',
+        'header.adminLogin': '管理员登录',
+        'header.adminLogout': '退出管理员',
+        'header.settings': '设置',
+        'access.title': '访问密钥',
+        'access.subtitle': '本站点已开启访问保护，请输入访问密钥继续。',
+        'access.placeholder': '请输入访问密钥',
+        'access.unlock': '解锁',
+        'access.unlocking': '解锁中…',
+        'access.empty': '请输入访问密钥',
+        'access.unlocked': '访问已解锁',
+        'admin.title': '管理员登录',
+        'admin.subtitle': '登录后可编辑设置、查看全部图库',
+        'admin.placeholder': '请输入管理员密钥',
+        'admin.login': '登录',
+        'admin.logging': '登录中…',
+        'admin.empty': '请输入管理员密钥',
+        'admin.success': '管理员已登录',
+        'admin.invalid': '管理员密钥无效',
+        'admin.loggedOut': '已退出管理员',
+        'settings.title': '设置',
+        'settings.groupApi': '上游 API',
+        'settings.groupAccess': '访问保护',
+        'settings.groupCaptcha': '人机验证',
+        'settings.groupRateLimit': '速率限制',
+        'settings.groupLimits': '运行参数',
+        'settings.r2Domain': 'R2 公开域名',
+        'settings.r2DomainHint': '公开图片直接走 R2 域名，绕过 Worker。留空则全部经 Worker。',
+        'settings.promptMax': 'Prompt 最大字符',
+        'settings.generationMaxN': '单次最大生成数 n',
+        'settings.referenceMaxCount': '参考图最大数量',
+        'settings.referenceMaxMb': '单张参考图最大 (MB)',
+        'settings.maxFileSizeMb': '单张生成图最大 (MB)',
+        'settings.responsesModel': '/v1/responses 模型',
+        'settings.accessSessionMinutes': '访问会话时长 (分钟)',
+        'settings.adminSessionMinutes': '管理员会话时长 (分钟)',
+        'settings.limitsHint': '超出范围会自动夹取到合法区间；保存后立即对前后端生效。',
+        'settings.range.promptMax': '范围 100 – 20000，默认 4000',
+        'settings.range.generationMaxN': '范围 1 – 20（管理员不受限制，仍按 20 上限）',
+        'settings.range.referenceMaxCount': '范围 0 – 16（0 表示禁用图生图）',
+        'settings.range.referenceMaxMb': '范围 1 – 50 MB',
+        'settings.range.maxFileSizeMb': '范围 1 – 100 MB',
+        'settings.range.responsesModel': '仅在 API 路径为 /v1/responses 时使用',
+        'settings.range.sessionMinutes': '范围 5 – 10080（最长 7 天）',
+        'settings.range.rateLimitLimit': '范围 1 – 1000',
+        'settings.range.rateLimitWindow': '范围 1 – 86400（24 小时）',
+        'settings.clamped': '部分值已自动修正到合法范围',
+        'settings.limitsErr': '请填写有效的运行参数',
+        'settings.limitsSaved': '运行参数已更新',
+        'settings.groupMaintenance': '维护',
+        'settings.badgeOn': '已启用',
+        'settings.rateLimitEnable': '按 IP 限制生成速率',
+        'settings.rateLimitHint': '每个访客在指定时间窗口内最多发起 N 次生成。管理员不受限制。',
+        'settings.rateLimitLimit': '最大次数',
+        'settings.rateLimitWindow': '时间窗口（秒）',
+        'settings.rateLimitSummary': '当前规则：每 {window} 秒最多 {limit} 次',
+        'settings.rateLimitSaved': '速率限制已更新',
+        'settings.rateLimitErr': '请填写有效的次数与窗口',
+        'settings.apiUrl': 'API Base URL',
+        'settings.apiUrlHint': '不包含 API Path 的根地址',
+        'settings.apiPath': 'API Path',
+        'settings.apiKey': 'API Key',
+        'settings.accessSection': '站点访问保护',
+        'settings.accessEnable': '启用访问密钥',
+        'settings.accessHint': '开启后所有访客必须先输入密钥才能访问站点',
+        'settings.accessKey': '访问密钥',
+        'settings.accessKeyPlaceholder': '留空保留当前密钥',
+        'settings.accessKeyState.unset': '当前未设置访问密钥',
+        'settings.accessKeyState.set': '当前密钥：{masked}（留空则保留）',
+        'settings.turnstileSection': '人机验证（Turnstile）',
+        'settings.turnstileEnable': '启用 Cloudflare Turnstile',
+        'settings.turnstileHint': '开启后非管理员用户每次生成都需通过验证。请到 Cloudflare 后台 → Turnstile 创建小部件获取密钥。',
+        'settings.turnstileSiteKey': 'Site Key',
+        'settings.turnstileSecret': 'Secret Key',
+        'settings.turnstileSecretPlaceholder': '留空保留当前密钥',
+        'settings.turnstileSecretState.unset': '当前未设置 Secret Key',
+        'settings.turnstileSecretState.set': '当前 Secret：{masked}（留空则保留）',
+        'settings.turnstileErrKeys': '启用前请先填写 Site Key 与 Secret Key',
+        'settings.turnstileSaved': 'Turnstile 设置已更新',
+        'generate.captchaPending': '请先完成人机验证（页面下方）',
+        'generate.captchaFailed': '人机验证失败，请重试',
+        'generate.quantityHint': '当前最多 {n} 张/次',
+        'generate.quantityCapped': '当前限制每次最多 {n} 张',
+        'generate.promptEmpty': '请先填写 Prompt',
+        'settings.cleanupSection': '存储清理',
+        'settings.cleanupHint': '清理 R2 中没有图库记录引用的孤儿图片（10 分钟前的对象才会被扫描）',
+        'settings.cleanupButton': '清理孤儿图片',
+        'settings.cleanupRunning': '清理中…',
+        'settings.cleanupResult': '已扫描 {scanned} 个，删除 {deleted} 个孤儿图片',
+        'settings.cleanupFail': '清理失败：{msg}',
+        'settings.savedApi': '配置已保存',
+        'settings.savedLock': '访问保护已更新',
+        'settings.errApiUrl': '请填写 API URL',
+        'settings.errApiKey': '请填写 API Key',
+        'settings.errLockKey': '启用访问保护时请先设置访问密钥',
+        'generate.heading': '生成图像',
+        'generate.prompt': '提示词',
+        'generate.promptPlaceholder': '一只赛博朋克狐狸站在霓虹灯下的雨夜街头，电影感，超精细…',
+        'generate.referenceImages': '参考图',
+        'generate.referenceHint': '（可选，最多 {count} 张）',
+        'generate.referenceTip': '可上传或粘贴/拖拽（PNG/JPEG/WebP）。最多 {count} 张，每张 ≤ {mb}MB；上传后切换为图生图。',
+        'generate.referenceTipDisabled': '管理员已禁用参考图上传。',
+        'generate.size': '图像尺寸',
+        'generate.model': '模型',
+        'generate.quality': '质量',
+        'generate.format': '格式',
+        'generate.compression': '压缩',
+        'generate.compressionDisabled': 'PNG 不可用',
+        'generate.quantity': '数量',
+        'generate.action': '生成',
+        'generate.generating': '生成中…',
+        'generate.public': '公开到图库',
+        'generate.privateHint': '未勾选则仅本浏览器可见',
+        'generate.errPrompt': '请输入提示词',
+        'generate.errLoad': '生成的图像加载失败',
+        'generate.errDefault': '生成失败',
+        'generate.errTimeout': '生成超时（超过 10 分钟）',
+        'generate.errStuck': '后台任务停滞，已自动放弃。请检查上游 API 是否可达',
+        'generate.galleryRefreshFail': '图像已生成，但图库刷新失败',
+        'quality.auto': '自动',
+        'quality.low': '低',
+        'quality.medium': '中',
+        'quality.high': '高',
+        'preview.heading': '预览',
+        'preview.regenerate': '重新生成',
+        'preview.generating': '生成中…',
+        'preview.queued': '排队中…',
+        'preview.elapsed': '耗时',
+        'gallery.heading': '图库',
+        'gallery.scope.default': '默认',
+        'gallery.scope.all': '全部',
+        'gallery.prev': '上一页',
+        'gallery.next': '下一页',
+        'gallery.pageInfo': '第 {page} / {total} 页',
+        'gallery.count': '共 {n} 张',
+        'gallery.emptyTitle': '图库还是空的',
+        'gallery.emptyDesc': '描述你想要创作的画面，点击「生成」开始',
+        'gallery.emptyHint': '试试这样的提示："清晨阳光下的宁静山间湖泊"',
+        'gallery.privateBadge': '私密',
+        'gallery.toggleSelect': '选择',
+        'gallery.exitSelect': '取消选择',
+        'gallery.selectAll': '本页全选',
+        'gallery.batchDelete': '批量删除',
+        'gallery.batchConfirm': '确定要删除选中的 {n} 张图片吗？此操作不可撤销。',
+        'gallery.batchResult': '已删除 {deleted} 张{missingPart}',
+        'gallery.batchMissing': '，{n} 张未找到',
+        'gallery.batchFail': '批量删除失败：{msg}',
+        'gallery.editTitle': '编辑此图（参考 + 回填参数）',
+        'gallery.deleteTitle': '删除',
+        'gallery.copyTitle': '复制提示词',
+        'gallery.confirmDelete': '确定要从图库中删除此图吗？',
+        'gallery.deleteSuccess': '已删除',
+        'gallery.deleteFail': '删除失败：{msg}',
+        'gallery.editLoaded': '已载入参考图与参数',
+        'gallery.editFail': '载入图库图像失败',
+        'lightbox.heading': '生成详情',
+        'lightbox.close': '关闭预览',
+        'lightbox.zoomIn': '放大',
+        'lightbox.zoomOut': '缩小',
+        'lightbox.zoomFit': '适应窗口',
+        'lightbox.zoomActual': '原始大小（1:1）',
+        'lightbox.prompt': '提示词',
+        'lightbox.parameters': '参数',
+        'lightbox.edit': '编辑此图',
+        'common.cancel': '取消',
+        'common.save': '保存',
+        'common.copy': '复制',
+        'common.copied': '已复制',
+        'common.copyFail': '复制失败',
+        'common.download': '下载',
+        'common.clear': '清空',
+        'common.notStored': '未记录',
+        'param.model': '模型',
+        'param.size': '尺寸',
+        'param.quality': '质量',
+        'param.outputFormat': '输出格式',
+        'param.outputCompression': '输出压缩',
+        'param.quantity': '数量',
+        'param.apiPath': 'API Path',
+        'param.public': '公开',
+        'param.public.yes': '是',
+        'param.public.no': '否',
+        'reference.maxCount': '最多支持 {n} 张参考图',
+        'reference.skipFormat': '已跳过 {name}：格式不支持',
+        'reference.skipSize': '已跳过 {name}：超过 {mb}MB',
+        'reference.disabled': '管理员已禁用参考图上传',
+        'reference.readFail': '读取文件失败',
+        'reference.pasted': '已粘贴 {n} 张参考图',
+        'size.dialogTitle': '设置图像尺寸',
+        'size.current': '当前：',
+        'size.tab.auto': '自动',
+        'size.tab.ratio': '比例',
+        'size.tab.custom': '自定义',
+        'size.autoTitle': '自动尺寸',
+        'size.autoDesc': '传入 auto，由模型根据提示词与能力自动选择输出尺寸。',
+        'size.baseLabel': '基础分辨率',
+        'size.ratioLabel': '宽高比',
+        'size.customLabel': '输入精确像素值',
+        'size.width': '宽',
+        'size.height': '高',
+        'size.customNote': '会自动校正：宽高均需为 16 的倍数，最大边 3840px，最大宽高比 3:1，总像素 655360 - 8294400。',
+        'size.willUse': '将使用',
+        'size.confirm': '确认',
+        'size.metaAuto': '自动',
+        'size.metaCustom': '自定义',
+        'size.metaRatio': '比例 · {base} · {ratio}',
+        'error.network': '网络请求失败：{action} → {msg}',
+        'error.server': '服务器返回错误（{status}）：{msg}',
+        'error.empty': '服务器返回空响应（{action}）',
+      },
+      en: {
+        'page.title': 'GPT Image Panel',
+        'header.title': 'GPT Image Panel',
+        'header.subtitle': 'Image Generation Interface',
+        'header.toggleLanguage': 'Switch language',
+        'header.adminLogin': 'Admin Login',
+        'header.adminLogout': 'Logout admin',
+        'header.settings': 'Settings',
+        'access.title': 'Access Key',
+        'access.subtitle': 'Site access protection is enabled. Enter the access key to continue.',
+        'access.placeholder': 'Enter access key',
+        'access.unlock': 'Unlock',
+        'access.unlocking': 'Unlocking…',
+        'access.empty': 'Please enter the access key',
+        'access.unlocked': 'Access unlocked',
+        'admin.title': 'Admin Login',
+        'admin.subtitle': 'Sign in to edit settings and view the full gallery',
+        'admin.placeholder': 'Enter admin key',
+        'admin.login': 'Login',
+        'admin.logging': 'Signing in…',
+        'admin.empty': 'Please enter the admin key',
+        'admin.success': 'Signed in as admin',
+        'admin.invalid': 'Invalid admin key',
+        'admin.loggedOut': 'Signed out',
+        'settings.title': 'Settings',
+        'settings.groupApi': 'Upstream API',
+        'settings.groupAccess': 'Access Protection',
+        'settings.groupCaptcha': 'Captcha',
+        'settings.groupRateLimit': 'Rate Limit',
+        'settings.groupLimits': 'Runtime Limits',
+        'settings.r2Domain': 'R2 public domain',
+        'settings.r2DomainHint': 'Public images served directly via this domain, bypassing the Worker. Leave empty to always go through the Worker.',
+        'settings.promptMax': 'Prompt max length',
+        'settings.generationMaxN': 'Max images per request (n)',
+        'settings.referenceMaxCount': 'Max reference images',
+        'settings.referenceMaxMb': 'Reference image max (MB)',
+        'settings.maxFileSizeMb': 'Generated image max (MB)',
+        'settings.responsesModel': '/v1/responses model',
+        'settings.accessSessionMinutes': 'Access session (minutes)',
+        'settings.adminSessionMinutes': 'Admin session (minutes)',
+        'settings.limitsHint': 'Out-of-range values are clamped automatically; saved values take effect immediately on both client and server.',
+        'settings.range.promptMax': 'Range 100 – 20000, default 4000',
+        'settings.range.generationMaxN': 'Range 1 – 20 (admins are not capped beyond the 20 hard limit)',
+        'settings.range.referenceMaxCount': 'Range 0 – 16 (0 disables image-to-image)',
+        'settings.range.referenceMaxMb': 'Range 1 – 50 MB',
+        'settings.range.maxFileSizeMb': 'Range 1 – 100 MB',
+        'settings.range.responsesModel': 'Used only when API path is /v1/responses',
+        'settings.range.sessionMinutes': 'Range 5 – 10080 (up to 7 days)',
+        'settings.range.rateLimitLimit': 'Range 1 – 1000',
+        'settings.range.rateLimitWindow': 'Range 1 – 86400 (24 hours)',
+        'settings.clamped': 'Some values were clamped to valid ranges',
+        'settings.limitsErr': 'Enter valid runtime limits',
+        'settings.limitsSaved': 'Runtime limits updated',
+        'settings.groupMaintenance': 'Maintenance',
+        'settings.badgeOn': 'On',
+        'settings.rateLimitEnable': 'Limit generation rate per IP',
+        'settings.rateLimitHint': 'Each visitor may run at most N generations within the configured window. Admins are not limited.',
+        'settings.rateLimitLimit': 'Max requests',
+        'settings.rateLimitWindow': 'Window (seconds)',
+        'settings.rateLimitSummary': 'Current: up to {limit} per {window}s',
+        'settings.rateLimitSaved': 'Rate limit updated',
+        'settings.rateLimitErr': 'Enter valid limit and window',
+        'settings.apiUrl': 'API Base URL',
+        'settings.apiUrlHint': 'The base URL without the API path',
+        'settings.apiPath': 'API Path',
+        'settings.apiKey': 'API Key',
+        'settings.accessSection': 'Site Access Protection',
+        'settings.accessEnable': 'Enable access key',
+        'settings.accessHint': 'When enabled, every visitor must enter the access key first.',
+        'settings.accessKey': 'Access key',
+        'settings.accessKeyPlaceholder': 'Leave empty to keep current key',
+        'settings.accessKeyState.unset': 'No access key is set',
+        'settings.accessKeyState.set': 'Current key: {masked} (leave empty to keep it)',
+        'settings.turnstileSection': 'Captcha (Turnstile)',
+        'settings.turnstileEnable': 'Enable Cloudflare Turnstile',
+        'settings.turnstileHint': 'When enabled, non-admin users must solve a captcha before generating. Create a widget in Cloudflare → Turnstile to obtain the keys.',
+        'settings.turnstileSiteKey': 'Site Key',
+        'settings.turnstileSecret': 'Secret Key',
+        'settings.turnstileSecretPlaceholder': 'Leave empty to keep the current secret',
+        'settings.turnstileSecretState.unset': 'No secret key set',
+        'settings.turnstileSecretState.set': 'Current secret: {masked} (leave empty to keep it)',
+        'settings.turnstileErrKeys': 'Site Key and Secret Key are required to enable Turnstile',
+        'settings.turnstileSaved': 'Turnstile settings updated',
+        'generate.captchaPending': 'Please complete the captcha below first',
+        'generate.captchaFailed': 'Captcha verification failed, please try again',
+        'generate.quantityHint': 'Up to {n} per request',
+        'generate.quantityCapped': 'Limited to {n} images per request',
+        'generate.promptEmpty': 'Please enter a prompt first',
+        'settings.cleanupSection': 'Storage Cleanup',
+        'settings.cleanupHint': 'Remove R2 image objects with no matching gallery entry (only objects older than 10 minutes are scanned)',
+        'settings.cleanupButton': 'Clean up orphan images',
+        'settings.cleanupRunning': 'Cleaning…',
+        'settings.cleanupResult': 'Scanned {scanned}, deleted {deleted} orphan(s)',
+        'settings.cleanupFail': 'Cleanup failed: {msg}',
+        'settings.savedApi': 'API configuration saved',
+        'settings.savedLock': 'Access protection updated',
+        'settings.errApiUrl': 'Please enter an API URL',
+        'settings.errApiKey': 'Please enter an API Key',
+        'settings.errLockKey': 'Set an access key before enabling protection',
+        'generate.heading': 'Generate Image',
+        'generate.prompt': 'Prompt',
+        'generate.promptPlaceholder': 'A cyberpunk fox standing on a neon-lit rainy street at night, cinematic, highly detailed…',
+        'generate.referenceImages': 'Reference Images',
+        'generate.referenceHint': '(optional, up to {count})',
+        'generate.addReference': 'Add reference image',
+        'generate.referenceTip': 'Upload, paste or drop (PNG/JPEG/WebP). Up to {count} images, ≤ {mb}MB each; switches to image-to-image.',
+        'generate.referenceTipDisabled': 'Reference uploads have been disabled by the admin.',
+        'generate.size': 'Image Size',
+        'generate.model': 'Model',
+        'generate.quality': 'Quality',
+        'generate.format': 'Format',
+        'generate.compression': 'Compression',
+        'generate.compressionDisabled': 'Disabled for PNG',
+        'generate.quantity': 'Quantity',
+        'generate.action': 'Generate',
+        'generate.generating': 'Generating…',
+        'generate.public': 'Publish to public gallery',
+        'generate.privateHint': 'If unchecked, only this browser will see it',
+        'generate.errPrompt': 'Please enter a prompt',
+        'generate.errLoad': 'Generated image could not be loaded',
+        'generate.errDefault': 'Failed to generate image',
+        'generate.errTimeout': 'Generation timed out (10 minutes)',
+        'generate.errStuck': 'Background job stalled. Verify the upstream API is reachable.',
+        'generate.galleryRefreshFail': 'Image generated, but gallery refresh failed',
+        'quality.auto': 'Auto',
+        'quality.low': 'Low',
+        'quality.medium': 'Medium',
+        'quality.high': 'High',
+        'preview.heading': 'Preview',
+        'preview.regenerate': 'Regenerate',
+        'preview.generating': 'Generating…',
+        'preview.queued': 'Queued…',
+        'preview.elapsed': 'Elapsed',
+        'gallery.heading': 'Gallery',
+        'gallery.scope.default': 'Default',
+        'gallery.scope.all': 'All',
+        'gallery.prev': 'Prev',
+        'gallery.next': 'Next',
+        'gallery.pageInfo': 'Page {page} / {total}',
+        'gallery.count': '{n} images',
+        'gallery.emptyTitle': 'Your gallery is empty',
+        'gallery.emptyDesc': 'Describe the image you want to create and hit Generate to get started',
+        'gallery.emptyHint': 'Try a prompt like "A serene mountain lake at sunrise"',
+        'gallery.privateBadge': 'Private',
+        'gallery.toggleSelect': 'Select',
+        'gallery.exitSelect': 'Exit selection',
+        'gallery.selectAll': 'Select page',
+        'gallery.batchDelete': 'Delete selected',
+        'gallery.batchConfirm': 'Delete {n} selected image(s)? This cannot be undone.',
+        'gallery.batchResult': 'Deleted {deleted}{missingPart}',
+        'gallery.batchMissing': ', {n} not found',
+        'gallery.batchFail': 'Batch delete failed: {msg}',
+        'gallery.editTitle': 'Edit (use as reference + prefill params)',
+        'gallery.deleteTitle': 'Delete',
+        'gallery.copyTitle': 'Copy prompt',
+        'gallery.confirmDelete': 'Delete this image from the gallery?',
+        'gallery.deleteSuccess': 'Deleted',
+        'gallery.deleteFail': 'Failed to delete: {msg}',
+        'gallery.editLoaded': 'Reference image and parameters loaded',
+        'gallery.editFail': 'Failed to load image from gallery',
+        'lightbox.heading': 'Generation Details',
+        'lightbox.close': 'Close preview',
+        'lightbox.zoomIn': 'Zoom in',
+        'lightbox.zoomOut': 'Zoom out',
+        'lightbox.zoomFit': 'Fit to window',
+        'lightbox.zoomActual': 'Actual size (1:1)',
+        'lightbox.prompt': 'Prompt',
+        'lightbox.parameters': 'Parameters',
+        'lightbox.edit': 'Edit this image',
+        'common.cancel': 'Cancel',
+        'common.save': 'Save',
+        'common.copy': 'Copy',
+        'common.copied': 'Copied',
+        'common.copyFail': 'Failed to copy',
+        'common.download': 'Download',
+        'common.clear': 'Clear',
+        'common.notStored': 'Not stored',
+        'param.model': 'Model',
+        'param.size': 'Size',
+        'param.quality': 'Quality',
+        'param.outputFormat': 'Output Format',
+        'param.outputCompression': 'Output Compression',
+        'param.quantity': 'Quantity',
+        'param.apiPath': 'API Path',
+        'param.public': 'Public',
+        'param.public.yes': 'Yes',
+        'param.public.no': 'No',
+        'reference.maxCount': 'Reference images limited to {n}',
+        'reference.skipFormat': 'Skipped {name}: unsupported format',
+        'reference.skipSize': 'Skipped {name}: exceeds {mb}MB',
+        'reference.disabled': 'Reference image uploads have been disabled by the admin',
+        'reference.readFail': 'Failed to read file',
+        'reference.pasted': 'Pasted {n} reference image(s)',
+        'size.dialogTitle': 'Set Image Size',
+        'size.current': 'Current: ',
+        'size.tab.auto': 'Auto',
+        'size.tab.ratio': 'Ratio',
+        'size.tab.custom': 'Custom Size',
+        'size.autoTitle': 'Auto Size',
+        'size.autoDesc': 'Pass auto and let the model choose the output size from the prompt and capabilities.',
+        'size.baseLabel': 'Base Resolution',
+        'size.ratioLabel': 'Aspect Ratio',
+        'size.customLabel': 'Enter Exact Pixel Values',
+        'size.width': 'Width',
+        'size.height': 'Height',
+        'size.customNote': 'Values are normalized to a valid size: width and height must be multiples of 16, max side 3840px, aspect ratio ≤ 3:1, and total pixels 655360 - 8294400.',
+        'size.willUse': 'Will Use',
+        'size.confirm': 'Confirm',
+        'size.metaAuto': 'Auto',
+        'size.metaCustom': 'Custom',
+        'size.metaRatio': 'Ratio · {base} · {ratio}',
+        'error.network': 'Network error while {action}: {msg}',
+        'error.server': 'Server error ({status}): {msg}',
+        'error.empty': 'Empty server response while {action}',
+      },
+    };
+
+    let currentLang = (localStorage.getItem('lang') === 'en') ? 'en' : 'zh';
+
+    function t(key, vars) {
+      const dict = I18N[currentLang] || I18N.zh;
+      let raw = dict[key];
+      if (raw === undefined) raw = (I18N.zh[key] !== undefined ? I18N.zh[key] : key);
+      if (!vars) return raw;
+      return raw.replace(/\{(\w+)\}/g, (_, k) => (k in vars ? String(vars[k]) : '{' + k + '}'));
+    }
+
+    function applyI18n() {
+      document.documentElement.lang = currentLang === 'en' ? 'en' : 'zh-CN';
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        const key = el.getAttribute('data-i18n');
+        el.textContent = t(key);
+      });
+      document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+        const spec = el.getAttribute('data-i18n-attr');
+        spec.split(',').forEach((pair) => {
+          const [attr, key] = pair.split(':').map((s) => s.trim());
+          if (attr && key) el.setAttribute(attr, t(key));
+        });
+      });
+      document.title = t('page.title');
+      const langLabel = document.getElementById('langToggleLabel');
+      if (langLabel) langLabel.textContent = currentLang === 'zh' ? 'EN' : '中';
+      handleOutputFormatChange();
+      renderSizeButton();
+      updatePromptLen();
+      renderGalleryPagination();
+      renderGalleryCount(galleryTotal);
+      refreshReferenceTip();
+      const lockEl = document.getElementById('settingsLockEnabled');
+      if (lockEl) renderAccessKeyState();
+    }
+
+    function refreshReferenceTip() {
+      const refOff = activeLimits.reference_max_count <= 0;
+      const refTip = document.getElementById('referenceTip');
+      if (refTip) {
+        refTip.textContent = refOff
+          ? t('generate.referenceTipDisabled')
+          : t('generate.referenceTip', { count: activeLimits.reference_max_count, mb: activeLimits.reference_max_mb });
+      }
+      const refHint = document.getElementById('referenceHint');
+      if (refHint) {
+        refHint.textContent = refOff ? '' : t('generate.referenceHint', { count: activeLimits.reference_max_count });
+      }
+    }
+
+    function toggleLanguage() {
+      currentLang = currentLang === 'zh' ? 'en' : 'zh';
+      localStorage.setItem('lang', currentLang);
+      applyI18n();
+    }
+
+    let currentImageUrl = null;
+    let currentFilename = null;
+    let lastRequestBody = null;
+    let generationStartedAt = null;
+    let galleryById = new Map();
+    const GALLERY_PAGE_SIZE = 9;
+    let galleryPage = 1;
+    let galleryTotalPages = 1;
+    let galleryTotal = 0;
+    let activeLightboxImage = null;
+    let isAdmin = false;
+    let accessRequired = false;
+    let referenceImages = [];
+    function referenceMaxCount() { return Math.max(0, Number(activeLimits.reference_max_count) || 0); }
+    function referenceMaxBytes() { return Math.max(1, Number(activeLimits.reference_max_mb) || 4) * 1024 * 1024; }
+    function referenceMaxMb() { return Math.max(1, Number(activeLimits.reference_max_mb) || 4); }
+    let galleryScope = 'default';
+    let cachedAccessLock = { enabled: false, key_set: false, key_masked: '***' };
+    let cachedTurnstile = { enabled: false, site_key: '', secret_key_set: false, secret_key_masked: '***' };
+    let cachedRateLimit = { enabled: false, limit: 10, window_seconds: 60 };
+    let cachedLimits = {
+      r2_public_domain: '',
+      prompt_max_chars: 4000,
+      reference_max_count: 4,
+      reference_max_mb: 4,
+      generation_max_n: 10,
+    };
+    let activeLimits = {
+      prompt_max_chars: 4000,
+      reference_max_count: 4,
+      reference_max_mb: 4,
+      generation_max_n: 10,
+    };
+    let activeTurnstile = { enabled: false, site_key: '' };
+    let turnstileWidgetId = null;
+    let turnstileScriptLoaded = false;
+    const SIZE_LIMITS = {
+      step: 16,
+      maxSide: 3840,
+      maxAspect: 3,
+      minPixels: 655360,
+      maxPixels: 8294400,
+    };
+    const SIZE_BASES = { '1K': 1024, '2K': 2048, '4K': 3840 };
+    const SIZE_RATIOS = {
+      '1:1': [1, 1],
+      '4:3': [4, 3],
+      '3:4': [3, 4],
+      '16:9': [16, 9],
+      '9:16': [9, 16],
+      '21:9': [21, 9],
+    };
+    let sizeState = {
+      mode: 'auto',
+      base: '1K',
+      ratio: '1:1',
+      customWidth: '1024',
+      customHeight: '1024',
+    };
+    let stagedSizeState = cloneSizeState(sizeState);
+
+    (async function() {
+      document.getElementById('promptInput').addEventListener('input', updatePromptLen);
+      document.getElementById('compressionInput').addEventListener('input', clampCompressionInput);
+      document.getElementById('quantityInput').addEventListener('input', clampQuantityInput);
+      document.addEventListener('paste', handleReferencePaste);
+      attachReferenceDragDrop();
+      attachPreviewInteractions();
+      applyI18n();
+      await initSession();
+    })();
+
+    function attachReferenceDragDrop() {
+      const dz = document.getElementById('referenceDropzone');
+      if (!dz) return;
+      ['dragenter', 'dragover'].forEach((evt) => {
+        dz.addEventListener(evt, (e) => {
+          if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+          e.preventDefault();
+          dz.classList.add('is-drag-over');
+        });
+      });
+      ['dragleave', 'dragend'].forEach((evt) => {
+        dz.addEventListener(evt, (e) => {
+          if (e.target !== dz && dz.contains(e.target)) return;
+          dz.classList.remove('is-drag-over');
+        });
+      });
+      dz.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dz.classList.remove('is-drag-over');
+        const files = Array.from(e.dataTransfer?.files || []).filter((f) => /^image\//i.test(f.type));
+        if (files.length === 0) return;
+        await ingestReferenceFiles(files);
+      });
+      // Prevent default drag-drop behavior outside the dropzone (avoid navigating away on errant drops)
+      ['dragover', 'drop'].forEach((evt) => {
+        document.addEventListener(evt, (e) => {
+          if (dz.contains(e.target)) return;
+          if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+            e.preventDefault();
+          }
+        });
+      });
+    }
+
+    function applySessionLimits(limits) {
+      if (!limits || typeof limits !== 'object') return;
+      activeLimits = {
+        prompt_max_chars: Number(limits.prompt_max_chars) || activeLimits.prompt_max_chars,
+        reference_max_count: Number(limits.reference_max_count) || 0,
+        reference_max_mb: Number(limits.reference_max_mb) || activeLimits.reference_max_mb,
+        generation_max_n: Number(limits.generation_max_n) || activeLimits.generation_max_n,
+      };
+      const promptInput = document.getElementById('promptInput');
+      if (promptInput) promptInput.maxLength = activeLimits.prompt_max_chars;
+      const refInput = document.getElementById('referenceFileInput');
+      const refDz = document.getElementById('referenceDropzone');
+      const refOff = activeLimits.reference_max_count <= 0;
+      if (refInput && refDz) {
+        refInput.disabled = refOff;
+        refDz.classList.toggle('opacity-50', refOff);
+        refDz.classList.toggle('pointer-events-none', refOff);
+      }
+      refreshReferenceTip();
+      const quantityInput = document.getElementById('quantityInput');
+      if (quantityInput) {
+        const cap = effectiveMaxN();
+        quantityInput.max = String(cap);
+        quantityInput.title = t('generate.quantityHint', { n: cap });
+      }
+      updatePromptLen();
+      clampQuantityInput();
+    }
+
+    function effectiveMaxN() {
+      const adminCap = 20;
+      const limit = Math.max(1, Number(activeLimits.generation_max_n) || 10);
+      return isAdmin ? adminCap : limit;
+    }
+
+    async function initSession() {
+      try {
+        const session = await apiFetch('/api/session', {}, 'session');
+        accessRequired = !!session.access_required;
+        isAdmin = !!session.is_admin;
+        activeTurnstile = session.turnstile || { enabled: false, site_key: '' };
+        applySessionLimits(session.limits);
+        if (accessRequired && !session.authenticated) {
+          openAccessGate();
+          return;
+        }
+      } catch (e) {
+        isAdmin = false;
+      }
+      document.getElementById('accessGate').classList.add('hidden');
+      applyAdminUI();
+      ensureTurnstileWidget();
+      await loadGallery();
+      if (isAdmin) await loadSettings();
+      resumeActiveJobIfAny();
+    }
+
+    function ensureTurnstileWidget() {
+      const container = document.getElementById('turnstileContainer');
+      if (!container) return;
+      if (isAdmin || !activeTurnstile.enabled || !activeTurnstile.site_key) {
+        container.classList.add('hidden');
+        if (turnstileWidgetId !== null && window.turnstile) {
+          try { window.turnstile.remove(turnstileWidgetId); } catch {}
+          turnstileWidgetId = null;
+        }
+        return;
+      }
+      container.classList.remove('hidden');
+      const render = () => {
+        if (turnstileWidgetId !== null) return;
+        if (!window.turnstile) return;
+        turnstileWidgetId = window.turnstile.render(container, {
+          sitekey: activeTurnstile.site_key,
+          theme: 'dark',
+        });
+      };
+      if (turnstileScriptLoaded || window.turnstile) {
+        render();
+      } else {
+        const s = document.createElement('script');
+        s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        s.async = true;
+        s.defer = true;
+        s.onload = () => { turnstileScriptLoaded = true; render(); };
+        document.head.appendChild(s);
+      }
+    }
+
+    function getTurnstileToken() {
+      if (turnstileWidgetId === null || !window.turnstile) return '';
+      const res = window.turnstile.getResponse(turnstileWidgetId);
+      return typeof res === 'string' ? res : '';
+    }
+
+    function flashTurnstileWidget() {
+      const c = document.getElementById('turnstileContainer');
+      if (!c) return;
+      try { c.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch {}
+      c.classList.add('flash-attention');
+      setTimeout(() => c.classList.remove('flash-attention'), 1600);
+    }
+
+    function resetTurnstileWidget() {
+      if (turnstileWidgetId !== null && window.turnstile) {
+        try { window.turnstile.reset(turnstileWidgetId); } catch {}
+      }
+    }
+
+    async function refreshAdminStatus() {
+      try {
+        const session = await apiFetch('/api/session', {}, 'session');
+        isAdmin = !!session.is_admin;
+        activeTurnstile = session.turnstile || { enabled: false, site_key: '' };
+        applySessionLimits(session.limits);
+      } catch (e) {
+        isAdmin = false;
+      }
+      ensureTurnstileWidget();
+    }
+
+    let gallerySelectedIds = new Set();
+
+    function applyAdminUI() {
+      const settingsBtn = document.getElementById('settingsBtn');
+      const adminLoginBtn = document.getElementById('adminLoginBtn');
+      const adminLogoutBtn = document.getElementById('adminLogoutBtn');
+      const scopeWrap = document.getElementById('galleryScopeWrap');
+
+      settingsBtn.classList.toggle('hidden', !isAdmin);
+      adminLogoutBtn.classList.toggle('hidden', !isAdmin);
+      adminLoginBtn.classList.toggle('hidden', isAdmin);
+      scopeWrap.classList.toggle('hidden', !isAdmin);
+      if (!isAdmin) gallerySelectedIds.clear();
+      if (!isAdmin && galleryScope !== 'default') galleryScope = 'default';
+      renderScopeButtons();
+      renderGallerySelectionBar();
+    }
+
+    function renderGallerySelectionBar() {
+      const bar = document.getElementById('galleryBatchBar');
+      const count = gallerySelectedIds.size;
+      const visible = isAdmin && count > 0;
+      if (bar) bar.classList.toggle('hidden', !visible);
+      const countEl = document.getElementById('gallerySelectedCount');
+      if (countEl) countEl.textContent = String(count);
+      document.body.classList.toggle('has-selection', visible);
+    }
+
+    function toggleGallerySelectAll() {
+      if (!isAdmin) return;
+      const all = Array.from(galleryById.keys());
+      const allSelected = all.length > 0 && all.every((id) => gallerySelectedIds.has(id));
+      if (allSelected) all.forEach((id) => gallerySelectedIds.delete(id));
+      else all.forEach((id) => gallerySelectedIds.add(id));
+      updateSelectionVisual();
+      renderGallerySelectionBar();
+    }
+
+    function clearGallerySelection() {
+      gallerySelectedIds.clear();
+      updateSelectionVisual();
+      renderGallerySelectionBar();
+    }
+
+    function toggleGalleryItemSelection(id, event) {
+      if (!isAdmin) return;
+      if (event) { event.stopPropagation(); event.preventDefault(); }
+      if (gallerySelectedIds.has(id)) gallerySelectedIds.delete(id);
+      else gallerySelectedIds.add(id);
+      updateSelectionVisual();
+      renderGallerySelectionBar();
+    }
+
+    function updateSelectionVisual() {
+      document.querySelectorAll('[data-gallery-card]').forEach((card) => {
+        const id = card.dataset.galleryCard;
+        card.classList.toggle('is-selected', gallerySelectedIds.has(id));
+      });
+    }
+
+    async function batchDeleteSelected() {
+      if (!isAdmin || gallerySelectedIds.size === 0) return;
+      const ids = Array.from(gallerySelectedIds);
+      if (!confirm(t('gallery.batchConfirm', { n: ids.length }))) return;
+      try {
+        const data = await apiFetch('/api/admin/gallery/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        }, 'batch delete gallery');
+        const missingCount = Array.isArray(data.missing) ? data.missing.length : 0;
+        const missingPart = missingCount > 0 ? t('gallery.batchMissing', { n: missingCount }) : '';
+        showToast(t('gallery.batchResult', { deleted: data.deleted ?? 0, missingPart }), 'success');
+        gallerySelectedIds.clear();
+        await loadGallery(galleryPage);
+        renderGallerySelectionBar();
+      } catch (e) {
+        showToast(t('gallery.batchFail', { msg: e.message || '' }), 'error');
+      }
+    }
+
+    function renderScopeButtons() {
+      document.querySelectorAll('.gallery-scope-btn').forEach((btn) => {
+        const active = btn.dataset.scope === galleryScope;
+        btn.classList.toggle('bg-zinc-800', active);
+        btn.classList.toggle('text-zinc-100', active);
+      });
+    }
+
+    function setGalleryScope(scope) {
+      if (galleryScope === scope) return;
+      galleryScope = scope;
+      renderScopeButtons();
+      loadGallery(1);
+    }
+
+    function openAccessGate() {
+      const gate = document.getElementById('accessGate');
+      const error = document.getElementById('accessKeyError');
+      error.classList.add('hidden');
+      gate.classList.remove('hidden');
+      document.getElementById('accessKeyInput').focus();
+    }
+
+    async function unlockAccess(event) {
+      event.preventDefault();
+      const input = document.getElementById('accessKeyInput');
+      const button = document.getElementById('accessKeyBtn');
+      const error = document.getElementById('accessKeyError');
+      const accessKey = input.value.trim();
+
+      if (!accessKey) {
+        error.textContent = t('access.empty');
+        error.classList.remove('hidden');
+        return;
+      }
+
+      button.disabled = true;
+      const originalLabel = button.textContent;
+      button.textContent = t('access.unlocking');
+      error.classList.add('hidden');
+
+      try {
+        const data = await apiFetch('/api/access', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ access_key: accessKey }),
+        }, 'unlocking access');
+        if (!data.authenticated) throw new Error(t('access.empty'));
+        input.value = '';
+        document.getElementById('accessGate').classList.add('hidden');
+        showToast(t('access.unlocked'), 'success');
+        await refreshAdminStatus();
+        applyAdminUI();
+        await loadGallery();
+      } catch (e) {
+        error.textContent = e.message || t('access.empty');
+        error.classList.remove('hidden');
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+
+    function openAdminModal() {
+      const modal = document.getElementById('adminModal');
+      const error = document.getElementById('adminKeyError');
+      error.classList.add('hidden');
+      modal.classList.remove('hidden');
+      setTimeout(() => document.getElementById('adminKeyInput').focus(), 0);
+    }
+
+    function closeAdminModal() {
+      document.getElementById('adminModal').classList.add('hidden');
+    }
+
+    async function loginAdmin(event) {
+      event.preventDefault();
+      const input = document.getElementById('adminKeyInput');
+      const button = document.getElementById('adminKeyBtn');
+      const error = document.getElementById('adminKeyError');
+      const key = input.value.trim();
+      if (!key) { error.textContent = t('admin.empty'); error.classList.remove('hidden'); return; }
+
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = t('admin.logging');
+      error.classList.add('hidden');
+
+      try {
+        const data = await apiFetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ admin_key: key }),
+        }, 'admin login');
+        if (!data.is_admin) throw new Error(t('admin.invalid'));
+        input.value = '';
+        isAdmin = true;
+        closeAdminModal();
+        applyAdminUI();
+        await loadSettings();
+        await loadGallery();
+        showToast(t('admin.success'), 'success');
+      } catch (e) {
+        error.textContent = e.message || t('admin.invalid');
+        error.classList.remove('hidden');
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
+    async function logoutAdmin() {
+      try {
+        await apiFetch('/api/admin/logout', { method: 'POST' }, 'admin logout');
+      } catch {}
+      isAdmin = false;
+      applyAdminUI();
+      await loadGallery();
+      showToast(t('admin.loggedOut'), 'success');
+    }
+
+    async function loadSettings() {
+      try {
+        const [api, lock, ts, rl, lim] = await Promise.allSettled([
+          apiFetch('/api/settings', {}, 'loading settings'),
+          apiFetch('/api/admin/access-lock', {}, 'loading access lock'),
+          apiFetch('/api/admin/turnstile', {}, 'loading turnstile'),
+          apiFetch('/api/admin/rate-limit', {}, 'loading rate limit'),
+          apiFetch('/api/admin/limits', {}, 'loading limits'),
+        ]);
+        if (api.status === 'fulfilled') {
+          const data = api.value;
+          if (data.api_url) document.getElementById('settingsApiUrl').value = data.api_url;
+          document.getElementById('settingsApiPath').value = data.api_path || '/v1/images/generations';
+          document.getElementById('settingsApiKey').value =
+            data.api_key_masked && data.api_key_masked !== '***' ? '••••••••' : '';
+        }
+        if (lock.status === 'fulfilled') {
+          cachedAccessLock = lock.value;
+          document.getElementById('settingsLockEnabled').checked = !!lock.value.enabled;
+          document.getElementById('settingsAccessKey').value = '';
+          renderAccessKeyState();
+        }
+        if (ts.status === 'fulfilled') {
+          cachedTurnstile = ts.value;
+          document.getElementById('settingsTurnstileEnabled').checked = !!ts.value.enabled;
+          document.getElementById('settingsTurnstileSiteKey').value = ts.value.site_key || '';
+          document.getElementById('settingsTurnstileSecret').value = '';
+          renderTurnstileSecretState();
+        }
+        if (rl.status === 'fulfilled') {
+          cachedRateLimit = rl.value;
+          document.getElementById('settingsRateLimitEnabled').checked = !!rl.value.enabled;
+          document.getElementById('settingsRateLimitLimit').value = rl.value.limit ?? 10;
+          document.getElementById('settingsRateLimitWindow').value = rl.value.window_seconds ?? 60;
+          renderRateLimitSummary();
+        }
+        if (lim.status === 'fulfilled') {
+          cachedLimits = lim.value;
+          document.getElementById('settingsR2Domain').value = lim.value.r2_public_domain || '';
+          document.getElementById('settingsPromptMax').value = lim.value.prompt_max_chars ?? 4000;
+          document.getElementById('settingsGenerationMaxN').value = lim.value.generation_max_n ?? 10;
+          document.getElementById('settingsReferenceMaxCount').value = lim.value.reference_max_count ?? 4;
+          document.getElementById('settingsReferenceMaxMb').value = lim.value.reference_max_mb ?? 4;
+          document.getElementById('settingsMaxFileSizeMb').value = lim.value.max_file_size_mb ?? 50;
+          document.getElementById('settingsResponsesModel').value = lim.value.responses_model || '';
+          document.getElementById('settingsAccessSessionMin').value = lim.value.access_session_minutes ?? 180;
+          document.getElementById('settingsAdminSessionMin').value = lim.value.admin_session_minutes ?? 180;
+        }
+        renderSettingsBadges();
+      } catch {}
+    }
+
+    function renderSettingsBadges() {
+      const map = [
+        { id: 'settingsAccessBadge', on: !!cachedAccessLock.enabled && !!cachedAccessLock.key_set },
+        { id: 'settingsTurnstileBadge', on: !!cachedTurnstile.enabled && !!cachedTurnstile.site_key && !!cachedTurnstile.secret_key_set },
+        { id: 'settingsRateLimitBadge', on: !!cachedRateLimit.enabled },
+      ];
+      for (const m of map) {
+        const el = document.getElementById(m.id);
+        if (el) el.classList.toggle('hidden', !m.on);
+      }
+    }
+
+    function renderRateLimitSummary() {
+      const el = document.getElementById('settingsRateLimitSummary');
+      if (!el) return;
+      el.textContent = t('settings.rateLimitSummary', { limit: cachedRateLimit.limit, window: cachedRateLimit.window_seconds });
+    }
+
+    function renderAccessKeyState() {
+      const el = document.getElementById('settingsAccessKeyState');
+      if (!el) return;
+      if (cachedAccessLock.key_set) {
+        el.textContent = t('settings.accessKeyState.set', { masked: cachedAccessLock.key_masked });
+      } else {
+        el.textContent = t('settings.accessKeyState.unset');
+      }
+    }
+
+    function renderTurnstileSecretState() {
+      const el = document.getElementById('settingsTurnstileSecretState');
+      if (!el) return;
+      if (cachedTurnstile.secret_key_set) {
+        el.textContent = t('settings.turnstileSecretState.set', { masked: cachedTurnstile.secret_key_masked });
+      } else {
+        el.textContent = t('settings.turnstileSecretState.unset');
+      }
+    }
+
+    async function saveSettings() {
+      const apiUrl = document.getElementById('settingsApiUrl').value.trim();
+      const apiKey = document.getElementById('settingsApiKey').value.trim();
+      const apiPath = document.getElementById('settingsApiPath').value;
+      const lockEnabled = !!document.getElementById('settingsLockEnabled').checked;
+      const newAccessKey = document.getElementById('settingsAccessKey').value.trim();
+      const tsEnabled = !!document.getElementById('settingsTurnstileEnabled').checked;
+      const tsSiteKey = document.getElementById('settingsTurnstileSiteKey').value.trim();
+      const tsSecret = document.getElementById('settingsTurnstileSecret').value.trim();
+
+      if (!apiUrl) { showToast(t('settings.errApiUrl'), 'error'); return; }
+      if (!apiKey) { showToast(t('settings.errApiKey'), 'error'); return; }
+      if (lockEnabled && !cachedAccessLock.key_set && !newAccessKey) {
+        showToast(t('settings.errLockKey'), 'error'); return;
+      }
+      if (tsEnabled) {
+        const haveSite = tsSiteKey || cachedTurnstile.site_key;
+        const haveSecret = tsSecret || cachedTurnstile.secret_key_set;
+        if (!haveSite || !haveSecret) { showToast(t('settings.turnstileErrKeys'), 'error'); return; }
+      }
+
+      function clampSetting(id, min, max, fallback) {
+        const el = document.getElementById(id);
+        const raw = parseInt(el.value, 10);
+        const valid = Number.isFinite(raw) ? raw : fallback;
+        const clamped = Math.max(min, Math.min(max, valid));
+        if (raw !== clamped) {
+          el.value = String(clamped);
+          if (Number.isFinite(raw)) clampedAny = true;
+        }
+        return clamped;
+      }
+      let clampedAny = false;
+
+      const rlEnabled = !!document.getElementById('settingsRateLimitEnabled').checked;
+      const rlLimit = clampSetting('settingsRateLimitLimit', 1, 1000, 10);
+      const rlWindow = clampSetting('settingsRateLimitWindow', 1, 86400, 60);
+
+      const limR2 = document.getElementById('settingsR2Domain').value.trim();
+      const limPromptMax = clampSetting('settingsPromptMax', 100, 20000, 4000);
+      const limMaxN = clampSetting('settingsGenerationMaxN', 1, 20, 10);
+      const limRefCount = clampSetting('settingsReferenceMaxCount', 0, 16, 4);
+      const limRefMb = clampSetting('settingsReferenceMaxMb', 1, 50, 4);
+      const limMaxFile = clampSetting('settingsMaxFileSizeMb', 1, 100, 50);
+      const limResponsesModel = document.getElementById('settingsResponsesModel').value.trim();
+      const limAccessMin = clampSetting('settingsAccessSessionMin', 5, 10080, 180);
+      const limAdminMin = clampSetting('settingsAdminSessionMin', 5, 10080, 180);
+      if (clampedAny) showToast(t('settings.clamped'), 'success');
+
+      const apiBody = { api_url: apiUrl, api_path: apiPath };
+      apiBody.api_key = apiKey === '••••••••' ? null : apiKey;
+      const lockBody = { enabled: lockEnabled };
+      if (newAccessKey) lockBody.key = newAccessKey;
+      const tsBody = { enabled: tsEnabled };
+      if (tsSiteKey !== cachedTurnstile.site_key) tsBody.site_key = tsSiteKey;
+      if (tsSecret) tsBody.secret_key = tsSecret;
+      const rlBody = { enabled: rlEnabled, limit: rlLimit, window_seconds: rlWindow };
+
+      try {
+        await apiFetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(apiBody),
+        }, 'saving settings');
+
+        const lockResp = await apiFetch('/api/admin/access-lock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lockBody),
+        }, 'saving access lock');
+        cachedAccessLock = lockResp;
+        accessRequired = !!lockResp.enabled && !!lockResp.key_set;
+        document.getElementById('settingsAccessKey').value = '';
+        renderAccessKeyState();
+
+        const tsResp = await apiFetch('/api/admin/turnstile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tsBody),
+        }, 'saving turnstile');
+        cachedTurnstile = tsResp;
+        activeTurnstile = tsResp.enabled && tsResp.site_key
+          ? { enabled: true, site_key: tsResp.site_key }
+          : { enabled: false, site_key: '' };
+        document.getElementById('settingsTurnstileSecret').value = '';
+        renderTurnstileSecretState();
+        ensureTurnstileWidget();
+
+        const rlResp = await apiFetch('/api/admin/rate-limit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rlBody),
+        }, 'saving rate limit');
+        cachedRateLimit = rlResp;
+        renderRateLimitSummary();
+
+        const limResp = await apiFetch('/api/admin/limits', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            r2_public_domain: limR2,
+            prompt_max_chars: limPromptMax,
+            generation_max_n: limMaxN,
+            reference_max_count: limRefCount,
+            reference_max_mb: limRefMb,
+            max_file_size_mb: limMaxFile,
+            responses_model: limResponsesModel,
+            access_session_minutes: limAccessMin,
+            admin_session_minutes: limAdminMin,
+          }),
+        }, 'saving limits');
+        cachedLimits = limResp;
+        applySessionLimits({
+          prompt_max_chars: limResp.prompt_max_chars,
+          reference_max_count: limResp.reference_max_count,
+          reference_max_mb: limResp.reference_max_mb,
+          generation_max_n: limResp.generation_max_n,
+        });
+        renderSettingsBadges();
+
+        showToast(t('settings.savedApi'), 'success');
+        toggleSettings();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    }
+
+    function toggleSettings() {
+      const drawer = document.getElementById('settingsDrawer');
+      drawer.classList.toggle('hidden');
+      if (!drawer.classList.contains('hidden')) {
+        document.getElementById('settingsApiUrl').focus();
+      }
+    }
+
+    async function cleanupOrphans() {
+      const btn = document.getElementById('cleanupOrphansBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = t('settings.cleanupRunning');
+      try {
+        const data = await apiFetch('/api/admin/cleanup-orphans', { method: 'POST' }, 'cleanup orphans');
+        showToast(t('settings.cleanupResult', { scanned: data.scanned ?? 0, deleted: data.deleted ?? 0 }), 'success');
+      } catch (e) {
+        showToast(t('settings.cleanupFail', { msg: e.message || '' }), 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
+    function updatePromptLen() {
+      const len = document.getElementById('promptInput').value.length;
+      const cap = Math.max(1, Number(activeLimits.prompt_max_chars) || 4000);
+      const warn = Math.floor(cap * 0.75);
+      const el = document.getElementById('promptLen');
+      el.textContent = `${len} / ${cap}`;
+      el.className = len > cap ? 'text-xs text-red-500' : len > warn ? 'text-xs text-yellow-600' : 'text-xs text-zinc-600';
+    }
+
+    function clampIntegerInput(input, min, max, fallback) {
+      const raw = String(input.value).trim();
+      if (!raw) return null;
+
+      let value = Number.parseInt(raw, 10);
+      if (!Number.isFinite(value)) value = fallback;
+      value = Math.min(Math.max(value, min), max);
+      input.value = String(value);
+      return value;
+    }
+
+    function clampCompressionInput() {
+      return clampIntegerInput(document.getElementById('compressionInput'), 0, 100, 100);
+    }
+
+    let lastQuantityToastAt = 0;
+    function clampQuantityInput() {
+      const max = effectiveMaxN();
+      const input = document.getElementById('quantityInput');
+      input.max = String(max);
+      const raw = String(input.value).trim();
+      const requested = Number.parseInt(raw, 10);
+      const clamped = clampIntegerInput(input, 1, max, 1);
+      if (Number.isFinite(requested) && requested > max) {
+        const now = Date.now();
+        if (now - lastQuantityToastAt > 1500) {
+          lastQuantityToastAt = now;
+          showToast(t('generate.quantityCapped', { n: max }), 'error');
+        }
+      }
+      return clamped;
+    }
+
+    function handleOutputFormatChange() {
+      const format = document.getElementById('formatSelect').value;
+      const compressionInput = document.getElementById('compressionInput');
+      const isPng = format === 'png';
+
+      compressionInput.disabled = isPng;
+      compressionInput.placeholder = isPng ? t('generate.compressionDisabled') : '0-100';
+
+      if (isPng) {
+        compressionInput.value = '';
+      } else if (!compressionInput.value) {
+        compressionInput.value = '100';
+      } else {
+        clampCompressionInput();
+      }
+    }
+
+    function cloneSizeState(state) {
+      return { ...state };
+    }
+
+    function formatSizeValue(value) {
+      return value === 'auto' ? 'auto' : value.replace('x', ' x ');
+    }
+
+    function parsePositiveInt(value, fallback) {
+      const parsed = Number.parseInt(String(value).replace(/[^\d]/g, ''), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    function roundToStep(value, mode = 'nearest') {
+      const scaled = value / SIZE_LIMITS.step;
+      const rounded = mode === 'up' ? Math.ceil(scaled) : mode === 'down' ? Math.floor(scaled) : Math.round(scaled);
+      return Math.max(SIZE_LIMITS.step, rounded * SIZE_LIMITS.step);
+    }
+
+    function fitPixels(width, height, mode) {
+      const pixelLimit = mode === 'min' ? SIZE_LIMITS.minPixels : SIZE_LIMITS.maxPixels;
+      const scale = Math.sqrt(pixelLimit / (width * height));
+      const roundMode = mode === 'min' ? 'up' : 'down';
+      let nextWidth = Math.min(SIZE_LIMITS.maxSide, roundToStep(width * scale, roundMode));
+      let nextHeight = Math.min(SIZE_LIMITS.maxSide, roundToStep(height * scale, roundMode));
+
+      if (mode === 'min') {
+        while (nextWidth * nextHeight < SIZE_LIMITS.minPixels) {
+          if (nextWidth <= nextHeight && nextWidth < SIZE_LIMITS.maxSide) {
+            nextWidth += SIZE_LIMITS.step;
+          } else if (nextHeight < SIZE_LIMITS.maxSide) {
+            nextHeight += SIZE_LIMITS.step;
+          } else {
+            break;
+          }
+        }
+      } else {
+        while (nextWidth * nextHeight > SIZE_LIMITS.maxPixels) {
+          if (nextWidth >= nextHeight && nextWidth > SIZE_LIMITS.step) {
+            nextWidth -= SIZE_LIMITS.step;
+          } else if (nextHeight > SIZE_LIMITS.step) {
+            nextHeight -= SIZE_LIMITS.step;
+          } else {
+            break;
+          }
+        }
+      }
+
+      return [nextWidth, nextHeight];
+    }
+
+    function normalizeDimensions(inputWidth, inputHeight) {
+      let width = Math.min(roundToStep(parsePositiveInt(inputWidth, 1024)), SIZE_LIMITS.maxSide);
+      let height = Math.min(roundToStep(parsePositiveInt(inputHeight, 1024)), SIZE_LIMITS.maxSide);
+
+      if (width / height > SIZE_LIMITS.maxAspect) {
+        height = roundToStep(width / SIZE_LIMITS.maxAspect, 'up');
+      } else if (height / width > SIZE_LIMITS.maxAspect) {
+        width = roundToStep(height / SIZE_LIMITS.maxAspect, 'up');
+      }
+
+      if (width * height < SIZE_LIMITS.minPixels) {
+        [width, height] = fitPixels(width, height, 'min');
+      }
+
+      if (width * height > SIZE_LIMITS.maxPixels) {
+        [width, height] = fitPixels(width, height, 'max');
+      }
+
+      if (width / height > SIZE_LIMITS.maxAspect) {
+        height = roundToStep(width / SIZE_LIMITS.maxAspect, 'up');
+      } else if (height / width > SIZE_LIMITS.maxAspect) {
+        width = roundToStep(height / SIZE_LIMITS.maxAspect, 'up');
+      }
+
+      if (width * height > SIZE_LIMITS.maxPixels) {
+        [width, height] = fitPixels(width, height, 'max');
+      }
+
+      return { width, height };
+    }
+
+    function getRatioResolution(state) {
+      const baseSide = SIZE_BASES[state.base] || SIZE_BASES['1K'];
+      const [ratioWidth, ratioHeight] = SIZE_RATIOS[state.ratio] || SIZE_RATIOS['1:1'];
+      const isLandscape = ratioWidth >= ratioHeight;
+      const width = isLandscape ? baseSide : Math.round(baseSide * ratioWidth / ratioHeight);
+      const height = isLandscape ? Math.round(baseSide * ratioHeight / ratioWidth) : baseSide;
+      return normalizeDimensions(width, height);
+    }
+
+    function getCustomResolution(state) {
+      return normalizeDimensions(state.customWidth, state.customHeight);
+    }
+
+    function getSizeValue(state) {
+      if (state.mode === 'auto') return 'auto';
+      const resolution = state.mode === 'custom' ? getCustomResolution(state) : getRatioResolution(state);
+      return `${resolution.width}x${resolution.height}`;
+    }
+
+    function getSizeMeta(state) {
+      if (state.mode === 'auto') return t('size.metaAuto');
+      if (state.mode === 'custom') return t('size.metaCustom');
+      return t('size.metaRatio', { base: state.base, ratio: state.ratio });
+    }
+
+    function updateActiveSizeControls() {
+      document.querySelectorAll('[data-size-tab]').forEach(button => {
+        button.classList.toggle('active', button.dataset.sizeTab === stagedSizeState.mode);
+      });
+      document.querySelectorAll('[data-size-base]').forEach(button => {
+        button.classList.toggle('active', button.dataset.sizeBase === stagedSizeState.base);
+      });
+      document.querySelectorAll('[data-size-ratio]').forEach(button => {
+        button.classList.toggle('active', button.dataset.sizeRatio === stagedSizeState.ratio);
+      });
+    }
+
+    function updateSizeResult() {
+      const value = getSizeValue(stagedSizeState);
+      document.getElementById('sizeResultValue').textContent = value;
+      document.getElementById('sizeResultMeta').textContent = getSizeMeta(stagedSizeState);
+    }
+
+    function renderSizeDialog(syncCustomInputs = false) {
+      document.getElementById('sizeCurrentValue').textContent = formatSizeValue(getSizeValue(sizeState));
+      document.getElementById('sizeAutoPanel').classList.toggle('hidden', stagedSizeState.mode !== 'auto');
+      document.getElementById('sizeRatioPanel').classList.toggle('hidden', stagedSizeState.mode !== 'ratio');
+      document.getElementById('sizeCustomPanel').classList.toggle('hidden', stagedSizeState.mode !== 'custom');
+      if (syncCustomInputs) {
+        document.getElementById('customWidthInput').value = stagedSizeState.customWidth;
+        document.getElementById('customHeightInput').value = stagedSizeState.customHeight;
+      }
+      updateActiveSizeControls();
+      updateSizeResult();
+    }
+
+    function renderSizeButton() {
+      const value = getSizeValue(sizeState);
+      const button = document.getElementById('sizeSelect');
+      button.value = value;
+      document.getElementById('sizeSelectLabel').textContent = formatSizeValue(value);
+      document.getElementById('sizeSelectMeta').textContent = getSizeMeta(sizeState);
+    }
+
+    function openSizeDialog() {
+      stagedSizeState = cloneSizeState(sizeState);
+      renderSizeDialog(true);
+      document.getElementById('sizeDialog').classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSizeDialog() {
+      document.getElementById('sizeDialog').classList.add('hidden');
+      if (
+        document.getElementById('lightbox').classList.contains('hidden') &&
+        document.getElementById('settingsDrawer').classList.contains('hidden')
+      ) {
+        document.body.style.overflow = '';
+      }
+    }
+
+    function selectSizeMode(mode) {
+      stagedSizeState.mode = mode;
+      renderSizeDialog(mode === 'custom');
+      if (mode === 'custom') {
+        setTimeout(() => document.getElementById('customWidthInput').focus(), 0);
+      }
+    }
+
+    function selectSizeBase(base) {
+      stagedSizeState.mode = 'ratio';
+      stagedSizeState.base = base;
+      renderSizeDialog();
+    }
+
+    function selectSizeRatio(ratio) {
+      stagedSizeState.mode = 'ratio';
+      stagedSizeState.ratio = ratio;
+      renderSizeDialog();
+    }
+
+    function handleCustomSizeInput(field, value) {
+      const cleanValue = String(value).replace(/[^\d]/g, '');
+      if (field === 'width') {
+        stagedSizeState.customWidth = cleanValue;
+        if (value !== cleanValue) document.getElementById('customWidthInput').value = cleanValue;
+      } else {
+        stagedSizeState.customHeight = cleanValue;
+        if (value !== cleanValue) document.getElementById('customHeightInput').value = cleanValue;
+      }
+      stagedSizeState.mode = 'custom';
+      updateActiveSizeControls();
+      updateSizeResult();
+    }
+
+    function applySizeDialog() {
+      if (stagedSizeState.mode === 'custom') {
+        const resolution = getCustomResolution(stagedSizeState);
+        stagedSizeState.customWidth = String(resolution.width);
+        stagedSizeState.customHeight = String(resolution.height);
+      }
+      sizeState = cloneSizeState(stagedSizeState);
+      renderSizeButton();
+      closeSizeDialog();
+    }
+
+    function setLoading(loading) {
+      const btn = document.getElementById('generateBtn');
+      const preview = document.getElementById('previewSection');
+      const previewLoading = document.getElementById('previewLoading');
+      const previewImg = document.getElementById('previewImage');
+      const previewLoadingText = document.getElementById('previewLoadingText');
+      const inputs = ['promptInput', 'modelSelect', 'qualitySelect', 'formatSelect', 'compressionInput', 'quantityInput'];
+      const spinnerHTML = `<span class="spinner"></span> <span>${escapeHtml(t('generate.generating'))}</span>`;
+      const idleHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> <span>${escapeHtml(t('generate.action'))}</span>`;
+
+      btn.disabled = loading;
+      btn.innerHTML = loading ? spinnerHTML : idleHTML;
+      inputs.forEach(id => { document.getElementById(id).disabled = loading; });
+      document.getElementById('sizeSelect').disabled = loading;
+      if (!loading) handleOutputFormatChange();
+
+      if (loading) {
+        preview.classList.remove('hidden');
+        previewLoading.classList.remove('hidden');
+        previewLoadingText.textContent = t('preview.queued');
+        previewImg.removeAttribute('src');
+        previewImg.classList.add('hidden');
+        previewImg.style.opacity = '0';
+        const ctrls = document.getElementById('previewControls');
+        if (ctrls) ctrls.classList.add('hidden');
+        const thumbs = document.getElementById('previewThumbs');
+        if (thumbs) { thumbs.classList.add('hidden'); thumbs.innerHTML = ''; }
+        previewImages = [];
+        previewActiveIndex = 0;
+      } else {
+        previewLoading.classList.add('hidden');
+      }
+    }
+
+    function showError(msg) {
+      const banner = document.getElementById('errorBanner');
+      document.getElementById('errorText').textContent = msg;
+      banner.classList.remove('hidden');
+    }
+
+    function hideError() {
+      document.getElementById('errorBanner').classList.add('hidden');
+    }
+
+    function showToast(msg, type = 'success') {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.className = 'fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-lg text-sm font-medium shadow-xl transition-all duration-300 ' +
+        (type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white');
+      toast.style.opacity = '1';
+      toast.style.transform = 'translate(-50%, 0)';
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translate(-50%, 8px)';
+      }, 2500);
+    }
+
+    const OWNER_ID_KEY = 'gpt_image_owner_id';
+    const ACTIVE_JOB_KEY = 'gpt_image_active_job';
+    const OWNER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    function rememberActiveJob(jobId, prompt) {
+      try {
+        localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ id: jobId, prompt: prompt || '', t: Date.now() }));
+      } catch {}
+    }
+    function readActiveJob() {
+      try {
+        const raw = localStorage.getItem(ACTIVE_JOB_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !OWNER_ID_RE.test(parsed.id)) return null;
+        if (Date.now() - (parsed.t || 0) > 60 * 60 * 1000) return null;
+        return parsed;
+      } catch { return null; }
+    }
+    function clearActiveJob() {
+      try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch {}
+    }
+
+    function readStoredOwnerId() {
+      try {
+        const v = localStorage.getItem(OWNER_ID_KEY);
+        return v && OWNER_ID_RE.test(v) ? v : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeStoredOwnerId(id) {
+      if (!id || !OWNER_ID_RE.test(id)) return;
+      try { localStorage.setItem(OWNER_ID_KEY, id); } catch {}
+    }
+
+    function readCookieOwnerId() {
+      const m = document.cookie.match(/(?:^|;\s*)gpt_image_owner=([^;]+)/);
+      return m && OWNER_ID_RE.test(m[1]) ? m[1] : null;
+    }
+
+    async function apiFetch(url, options = {}, action = 'request') {
+      const headers = {
+        'Accept': 'application/json',
+        ...(options.headers || {}),
+      };
+      const owner = readStoredOwnerId();
+      if (owner && !headers['X-Owner-Id']) headers['X-Owner-Id'] = owner;
+
+      let res;
+      try {
+        res = await fetch(url, {
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+      } catch (error) {
+        throw new Error(t('error.network', { action, msg: error.message || 'fetch failed' }));
+      }
+      const cookieOwner = readCookieOwnerId();
+      if (cookieOwner && cookieOwner !== owner) writeStoredOwnerId(cookieOwner);
+      return readApiResponse(res, action);
+    }
+
+    async function readApiResponse(res, action = 'request') {
+      const contentType = res.headers.get('content-type') || '';
+      const bodyText = await res.text();
+      let data = null;
+
+      if (bodyText && contentType.includes('application/json')) {
+        try { data = JSON.parse(bodyText); } catch { data = null; }
+      }
+
+      if (!res.ok) {
+        const message = data?.detail || data?.error || data?.message || bodyText || action;
+        throw new Error(t('error.server', { status: res.status, msg: message }));
+      }
+
+      if (!data) {
+        throw new Error(bodyText || t('error.empty', { action }));
+      }
+
+      return data;
+    }
+
+    function formatElapsedTime(startedAt = generationStartedAt) {
+      if (typeof startedAt !== 'number') return '0.0s';
+      return `${((performance.now() - startedAt) / 1000).toFixed(1)}s`;
+    }
+
+    function updatePreviewTime(label, startedAt = generationStartedAt) {
+      const previewTime = document.getElementById('previewTime');
+      previewTime.textContent = `${label}: ${formatElapsedTime(startedAt)}`;
+      previewTime.classList.remove('hidden');
+    }
+
+    let elapsedTickerHandle = null;
+    let elapsedTickerLabel = '';
+    function startElapsedTicker(label) {
+      stopElapsedTicker();
+      elapsedTickerLabel = label;
+      const tick = () => {
+        if (elapsedTickerHandle === null) return;
+        updatePreviewTime(elapsedTickerLabel);
+        elapsedTickerHandle = setTimeout(tick, 100);
+      };
+      elapsedTickerHandle = setTimeout(tick, 0);
+    }
+    function stopElapsedTicker() {
+      if (elapsedTickerHandle !== null) {
+        clearTimeout(elapsedTickerHandle);
+        elapsedTickerHandle = null;
+      }
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read ' + file.name));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function ingestReferenceFiles(files) {
+      let added = 0;
+      const maxCount = referenceMaxCount();
+      const maxBytes = referenceMaxBytes();
+      const maxMb = referenceMaxMb();
+      if (maxCount === 0) {
+        showToast(t('reference.disabled'), 'error');
+        return 0;
+      }
+      for (const file of files) {
+        if (referenceImages.length >= maxCount) {
+          showToast(t('reference.maxCount', { n: maxCount }), 'error');
+          break;
+        }
+        const name = file.name || `pasted-${Date.now()}.${(file.type.split('/')[1] || 'png')}`;
+        if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+          showToast(t('reference.skipFormat', { name }), 'error');
+          continue;
+        }
+        if (file.size > maxBytes) {
+          showToast(t('reference.skipSize', { name, mb: maxMb }), 'error');
+          continue;
+        }
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          referenceImages.push({ name, dataUrl });
+          added++;
+        } catch (e) {
+          showToast(e.message || t('reference.readFail'), 'error');
+        }
+      }
+      if (added > 0) renderReferencePreviews();
+      return added;
+    }
+
+    async function handleReferenceFiles(event) {
+      const input = event.target;
+      const files = Array.from(input.files || []);
+      input.value = '';
+      await ingestReferenceFiles(files);
+    }
+
+    async function handleReferencePaste(event) {
+      const tag = (event.target && event.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (event.target && event.target.isContentEditable)) {
+        if (event.target.id !== 'promptInput') return;
+      }
+      const items = event.clipboardData?.items;
+      if (!items || items.length === 0) return;
+      const files = [];
+      for (const item of items) {
+        if (item.kind === 'file' && /^image\//i.test(item.type)) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length === 0) return;
+      event.preventDefault();
+      const added = await ingestReferenceFiles(files);
+      if (added > 0) showToast(t('reference.pasted', { n: added }), 'success');
+    }
+
+    function removeReferenceImage(index) {
+      referenceImages.splice(index, 1);
+      renderReferencePreviews();
+    }
+
+    function clearReferenceImages() {
+      referenceImages = [];
+      renderReferencePreviews();
+    }
+
+    function renderReferencePreviews() {
+      const previews = document.getElementById('referencePreviews');
+      const clearBtn = document.getElementById('referenceClearBtn');
+      previews.innerHTML = '';
+      if (referenceImages.length === 0) {
+        previews.classList.add('hidden');
+        clearBtn.classList.add('hidden');
+        return;
+      }
+      previews.classList.remove('hidden');
+      clearBtn.classList.remove('hidden');
+      referenceImages.forEach((ref, idx) => {
+        const tile = document.createElement('div');
+        tile.className = 'relative w-16 h-16 rounded-lg overflow-hidden border border-zinc-700 bg-zinc-900';
+        tile.innerHTML = `
+          <img src="${ref.dataUrl}" alt="${ref.name}" class="w-full h-full object-cover">
+          <button type="button" onclick="removeReferenceImage(${idx})" class="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-zinc-950/80 text-zinc-100 text-xs flex items-center justify-center hover:bg-red-600">×</button>
+        `;
+        previews.appendChild(tile);
+      });
+    }
+
+    let previewImages = [];
+    let previewActiveIndex = 0;
+    let previewBaseData = null;
+
+    function filenameFromUrl(url) {
+      const m = String(url || '').match(/[a-f0-9-]{36}\.(?:png|jpe?g|webp)(?:$|[?#])/i);
+      return m ? m[0].replace(/[?#].*$/, '') : '';
+    }
+
+    function renderPreviewThumbs() {
+      const wrap = document.getElementById('previewThumbs');
+      if (!wrap) return;
+      if (previewImages.length <= 1) {
+        wrap.classList.add('hidden');
+        wrap.innerHTML = '';
+        return;
+      }
+      wrap.classList.remove('hidden');
+      wrap.innerHTML = previewImages.map((img, idx) => {
+        const active = idx === previewActiveIndex ? ' is-active' : '';
+        return `<div class="preview-thumb${active}" data-idx="${idx}" title="#${idx + 1}">
+                  <img src="${escapeAttribute(img.image_url)}" alt="">
+                </div>`;
+      }).join('');
+      wrap.querySelectorAll('.preview-thumb').forEach((el) => {
+        el.addEventListener('click', () => selectPreviewImage(Number(el.dataset.idx)));
+      });
+    }
+
+    function selectPreviewImage(idx) {
+      if (!Array.isArray(previewImages) || idx < 0 || idx >= previewImages.length) return;
+      previewActiveIndex = idx;
+      const img = previewImages[idx];
+      currentImageUrl = img.image_url;
+      currentFilename = img.filename || filenameFromUrl(img.image_url);
+      activeLightboxImage = normalizeGalleryImage({
+        ...(previewBaseData || {}),
+        id: img.id || (previewBaseData ? previewBaseData.id : ''),
+        filename: currentFilename,
+        image_url: img.image_url,
+      });
+      const previewImg = document.getElementById('previewImage');
+      previewImg.src = img.image_url;
+      previewImg.alt = previewBaseData ? (previewBaseData.prompt || '') : '';
+      // Reset zoom when switching images
+      previewZoom.scale = 1; previewZoom.tx = 0; previewZoom.ty = 0;
+      applyPreviewTransform();
+      renderPreviewThumbs();
+    }
+
+    async function showGeneratedImage(data) {
+      previewBaseData = data;
+      const list = Array.isArray(data.images) && data.images.length > 0
+        ? data.images
+        : [{ id: data.id, filename: data.filename || filenameFromUrl(data.image_url), image_url: data.image_url }];
+      previewImages = list.map((img) => ({
+        id: img.id || '',
+        filename: img.filename || filenameFromUrl(img.image_url),
+        image_url: img.image_url,
+      }));
+      previewActiveIndex = 0;
+
+      const primary = previewImages[0];
+      currentImageUrl = primary.image_url;
+      currentFilename = primary.filename;
+      activeLightboxImage = normalizeGalleryImage({
+        ...data,
+        id: primary.id || data.id,
+        filename: currentFilename,
+        image_url: primary.image_url,
+      });
+
+      const previewImg = document.getElementById('previewImage');
+      const previewLoading = document.getElementById('previewLoading');
+      const previewControls = document.getElementById('previewControls');
+
+      document.getElementById('previewPrompt').textContent = data.prompt;
+      updatePreviewTime('Elapsed');
+      document.getElementById('previewSection').classList.remove('hidden');
+
+      await new Promise((resolve, reject) => {
+        previewImg.onload = resolve;
+        previewImg.onerror = () => reject(new Error(t('generate.errLoad')));
+        previewImg.src = primary.image_url;
+      });
+
+      previewImg.onload = null;
+      previewImg.onerror = null;
+      previewImg.alt = data.prompt || '';
+      previewImg.className = 'zoom-img';
+      previewImg.classList.remove('hidden');
+      previewImg.style.opacity = '1';
+      previewLoading.classList.add('hidden');
+      if (previewControls) previewControls.classList.remove('hidden');
+      previewZoom.scale = 1; previewZoom.tx = 0; previewZoom.ty = 0;
+      applyPreviewTransform();
+      attachPreviewInteractions();
+      renderPreviewThumbs();
+
+      try {
+        await loadGallery(1, { throwOnError: true });
+      } catch (error) {
+        console.error('Gallery refresh failed:', error);
+        showToast(t('generate.galleryRefreshFail'), 'error');
+      }
+    }
+
+    const GENERATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+    function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+    function isNetworkFetchError(err) {
+      const msg = (err && err.message) || '';
+      return /network/i.test(msg) || /failed to fetch/i.test(msg);
+    }
+
+    function streamGenerateJob(jobId) {
+      return new Promise((resolve, reject) => {
+        const ev = new EventSource('/api/generate/' + encodeURIComponent(jobId) + '/stream');
+        let settled = false;
+        const cleanup = () => { if (!settled) { settled = true; ev.close(); } };
+        ev.addEventListener('running', () => {
+          const loadingText = document.getElementById('previewLoadingText');
+          if (loadingText) loadingText.textContent = t('preview.generating');
+          updatePreviewTime(t('preview.elapsed'));
+        });
+        ev.addEventListener('waiting', () => {
+          const loadingText = document.getElementById('previewLoadingText');
+          if (loadingText) loadingText.textContent = t('preview.queued');
+          updatePreviewTime(t('preview.elapsed'));
+        });
+        ev.addEventListener('done', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            cleanup();
+            if (data.result) resolve(data.result);
+            else reject(new Error(t('generate.errDefault')));
+          } catch (err) { cleanup(); reject(err); }
+        });
+        ev.addEventListener('error', (e) => {
+          if (settled) return;
+          if (e && e.data) {
+            try {
+              const data = JSON.parse(e.data);
+              cleanup();
+              reject(new Error(data.detail || t('generate.errDefault')));
+              return;
+            } catch {}
+          }
+          cleanup();
+          reject(new Error(t('error.network', { action: 'image generation', msg: 'EventSource closed' })));
+        });
+      });
+    }
+
+    function pollIntervalMs(elapsedMs) {
+      if (elapsedMs < 60_000) return 20_000;
+      if (elapsedMs < 180_000) return 30_000;
+      return 45_000;
+    }
+
+    async function pollGenerateJob(jobId) {
+      const start = performance.now();
+      const deadline = start + GENERATE_POLL_TIMEOUT_MS;
+      let consecutiveNetErr = 0;
+      let lastUpdatedAt = null;
+      let stuckSinceMs = null;
+
+      await sleep(30_000);
+
+      while (performance.now() < deadline) {
+        try {
+          const data = await apiFetch('/api/generate/' + encodeURIComponent(jobId), {}, 'image generation');
+          consecutiveNetErr = 0;
+          if (data.status === 'success' && data.result) return data.result;
+          if (data.status === 'error') throw new Error(data.detail || t('generate.errDefault'));
+          if (data.updated_at !== lastUpdatedAt) {
+            lastUpdatedAt = data.updated_at;
+            stuckSinceMs = performance.now();
+          } else if (stuckSinceMs !== null && performance.now() - stuckSinceMs > 9 * 60 * 1000) {
+            throw new Error(t('generate.errStuck'));
+          }
+          const loadingText = document.getElementById('previewLoadingText');
+          if (loadingText) loadingText.textContent = t('preview.generating');
+          updatePreviewTime(t('preview.elapsed'));
+        } catch (e) {
+          if (!isNetworkFetchError(e)) throw e;
+          consecutiveNetErr++;
+          if (consecutiveNetErr >= 6) throw e;
+        }
+        await sleep(pollIntervalMs(performance.now() - start));
+      }
+      throw new Error(t('generate.errTimeout'));
+    }
+
+    async function generateImage() {
+      hideError();
+      const prompt = document.getElementById('promptInput').value.trim();
+      if (!prompt) {
+        showError(t('generate.errPrompt'));
+        showToast(t('generate.promptEmpty'), 'error');
+        const promptEl = document.getElementById('promptInput');
+        if (promptEl) { promptEl.focus(); try { promptEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch {} }
+        return;
+      }
+
+      const outputFormat = document.getElementById('formatSelect').value;
+      const quantity = clampQuantityInput() || 1;
+      const requestBody = {
+        prompt,
+        size: document.getElementById('sizeSelect').value,
+        model: document.getElementById('modelSelect').value,
+        n: quantity,
+        quality: document.getElementById('qualitySelect').value,
+        output_format: outputFormat,
+      };
+
+      if (outputFormat !== 'png') {
+        requestBody.output_compression = clampCompressionInput() ?? 100;
+      }
+      if (referenceImages.length > 0) {
+        requestBody.reference_images = referenceImages.map((r) => r.dataUrl);
+      }
+      requestBody.is_public = !!document.getElementById('publicToggle').checked;
+
+      if (activeTurnstile.enabled && !isAdmin) {
+        const token = getTurnstileToken();
+        if (!token) {
+          showError(t('generate.captchaPending'));
+          showToast(t('generate.captchaPending'), 'error');
+          flashTurnstileWidget();
+          return;
+        }
+        requestBody.turnstile_token = token;
+      }
+      lastRequestBody = requestBody;
+
+      generationStartedAt = performance.now();
+      setLoading(true);
+      document.getElementById('previewPrompt').textContent = prompt;
+      startElapsedTicker(t('preview.elapsed'));
+      try {
+        const submitted = await apiFetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+        }, 'image generation');
+        if (!submitted.job_id) throw new Error(t('generate.errDefault'));
+        rememberActiveJob(submitted.job_id, prompt);
+        const result = await runJobStream(submitted.job_id);
+        clearActiveJob();
+        stopElapsedTicker();
+        updatePreviewTime(t('preview.elapsed'));
+        await showGeneratedImage(result);
+        resetTurnstileWidget();
+        setLoading(false);
+      } catch (e) {
+        clearActiveJob();
+        stopElapsedTicker();
+        setLoading(false);
+        updatePreviewTime(t('preview.elapsed'));
+        resetTurnstileWidget();
+        showError(e.message || t('generate.errDefault'));
+      }
+    }
+
+    async function runJobStream(jobId) {
+      try {
+        return await streamGenerateJob(jobId);
+      } catch (e) {
+        // EventSource failed (network drop, server kill); fall back to polling so cron can finish the job
+        console.warn('SSE failed, falling back to polling:', e?.message);
+        return await pollGenerateJob(jobId);
+      }
+    }
+
+    async function resumeActiveJobIfAny() {
+      const active = readActiveJob();
+      if (!active) return;
+      generationStartedAt = performance.now() - Math.max(0, Date.now() - active.t);
+      setLoading(true);
+      document.getElementById('previewPrompt').textContent = active.prompt || '';
+      startElapsedTicker(t('preview.elapsed'));
+      try {
+        const result = await runJobStream(active.id);
+        clearActiveJob();
+        stopElapsedTicker();
+        updatePreviewTime(t('preview.elapsed'));
+        await showGeneratedImage(result);
+        setLoading(false);
+      } catch (e) {
+        clearActiveJob();
+        stopElapsedTicker();
+        setLoading(false);
+        updatePreviewTime(t('preview.elapsed'));
+        showError(e.message || t('generate.errDefault'));
+      }
+    }
+
+    function regenerate() {
+      if (lastRequestBody) generateImage();
+    }
+
+    function downloadCurrent() {
+      if (!currentFilename) return;
+      const a = document.createElement('a');
+      a.href = '/api/download/' + currentFilename;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    async function loadGallery(page = galleryPage, options = {}) {
+      const { throwOnError = false } = options;
+      try {
+        const params = new URLSearchParams({
+          page: String(page),
+          page_size: String(GALLERY_PAGE_SIZE),
+        });
+        if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
+        const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
+        const grid = document.getElementById('galleryGrid');
+        const empty = document.getElementById('galleryEmpty');
+        const pagination = document.getElementById('galleryPagination');
+
+        galleryPage = data.page || 1;
+        galleryTotalPages = data.total_pages || 1;
+        galleryTotal = data.total || 0;
+
+        renderGalleryCount(galleryTotal);
+        renderGalleryPagination(data);
+
+        if (!data.images || data.images.length === 0) {
+          galleryById = new Map();
+          grid.innerHTML = '';
+          empty.classList.remove('hidden');
+          pagination.classList.add('hidden');
+          return;
+        }
+
+        empty.classList.add('hidden');
+        pagination.classList.toggle('hidden', galleryTotalPages <= 1);
+        galleryById = new Map(data.images.map(img => [img.id, normalizeGalleryImage(img)]));
+        const localeStr = currentLang === 'zh' ? 'zh-CN' : 'en-US';
+        grid.innerHTML = data.images.map(img => {
+          const date = new Date(img.created_at);
+          const timeStr = date.toLocaleString(localeStr, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          const shortPrompt = img.prompt.length > 80 ? img.prompt.substring(0, 80) + '...' : img.prompt;
+          const escapedImageIdAttr = escapeAttribute(img.id);
+          const escapedPromptAttr = escapeAttribute(img.prompt);
+          const escapedShortPrompt = escapeHtml(shortPrompt);
+          const privateBadge = img.is_public === false
+            ? `<span class="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] uppercase tracking-wider rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">${escapeHtml(t('gallery.privateBadge'))}</span>`
+            : '';
+          const editBtn = `<button onclick="event.stopPropagation(); editImageFromGallery('${escapeAttribute(img.id)}')"
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-emerald-400 hover:bg-emerald-900/20 transition-colors"
+                      title="${escapeAttribute(t('gallery.editTitle'))}">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                      </svg>
+                    </button>`;
+          const deleteBtn = isAdmin
+            ? `<button onclick="event.stopPropagation(); deleteImage('${escapeAttribute(img.id)}')"
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+                      title="${escapeAttribute(t('gallery.deleteTitle'))}">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                      </svg>
+                    </button>`
+            : '';
+          const previewSrc = img.image_url || ('/api/image/' + img.filename);
+          const selectHandle = isAdmin
+            ? `<button type="button" class="gallery-select-handle" onclick="toggleGalleryItemSelection('${escapeAttribute(img.id)}', event)" data-i18n-attr="title:gallery.toggleSelect" title="选择">
+                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+               </button>`
+            : '';
+          const selectedClass = (isAdmin && gallerySelectedIds.has(img.id)) ? ' is-selected' : '';
+          return `
+            <div class="gallery-card bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden${selectedClass}" data-gallery-card="${escapedImageIdAttr}">
+              ${selectHandle}
+              <div class="relative cursor-pointer group" data-image-id="${escapedImageIdAttr}" onclick="openLightbox(this.dataset.imageId)">
+                <img src="${escapeAttribute(previewSrc)}" alt="${escapedPromptAttr}"
+                  class="w-full aspect-square object-cover bg-zinc-800" loading="lazy">
+                ${privateBadge}
+                <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+                  <span class="text-xs text-white truncate">${escapedShortPrompt}</span>
+                </div>
+              </div>
+              <div class="p-3">
+                <p class="text-xs text-zinc-500 truncate" title="${escapedPromptAttr}">${escapedShortPrompt}</p>
+                <div class="flex items-center justify-between mt-2">
+                  <span class="text-xs text-zinc-600">${timeStr}</span>
+                  <div class="flex gap-1">
+                    ${editBtn}
+                    <a href="/api/download/${img.filename}" download
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+                      onclick="event.stopPropagation()">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                      </svg>
+                    </a>
+                    ${deleteBtn}
+                    <button onclick="copyPrompt(event, this)"
+                      data-prompt="${escapedPromptAttr}"
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-emerald-400 hover:bg-emerald-900/20 transition-colors"
+                      title="${escapeAttribute(t('gallery.copyTitle'))}">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+        if (isAdmin && gallerySelectedIds.size > 0) {
+          const visible = new Set(galleryById.keys());
+          for (const id of Array.from(gallerySelectedIds)) {
+            if (!visible.has(id)) gallerySelectedIds.delete(id);
+          }
+          renderGallerySelectionBar();
+        }
+      } catch (e) {
+        console.error('Failed to load gallery:', e);
+        if (throwOnError) throw e;
+      }
+    }
+
+    function renderGalleryCount(total) {
+      const count = document.getElementById('galleryCount');
+      count.textContent = total > 0 ? t('gallery.count', { n: total }) : '';
+    }
+
+    async function editImageFromGallery(id) {
+      const meta = galleryById.get(id);
+      if (!meta) return;
+      try {
+        const resp = await fetch('/api/image/' + meta.filename, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(t('gallery.editFail'));
+        const blob = await resp.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('read fail'));
+          reader.readAsDataURL(blob);
+        });
+        referenceImages = [{ name: meta.filename, dataUrl }];
+        renderReferencePreviews();
+
+        document.getElementById('promptInput').value = meta.prompt || '';
+        updatePromptLen();
+
+        if (meta.size && meta.size !== 'Unknown') {
+          applySizeFromValue(meta.size);
+        }
+        if (meta.model) {
+          const modelSel = document.getElementById('modelSelect');
+          if ([...modelSel.options].some((o) => o.value === meta.model)) modelSel.value = meta.model;
+        }
+        if (meta.quality && ['auto','low','medium','high'].includes(meta.quality)) {
+          document.getElementById('qualitySelect').value = meta.quality;
+        }
+        if (meta.output_format && ['png','jpeg','webp'].includes(meta.output_format)) {
+          document.getElementById('formatSelect').value = meta.output_format;
+          handleOutputFormatChange();
+          if (meta.output_format !== 'png' && meta.output_compression != null) {
+            document.getElementById('compressionInput').value = String(meta.output_compression);
+          }
+        }
+        if (meta.n) {
+          document.getElementById('quantityInput').value = String(meta.n);
+          clampQuantityInput();
+        }
+        document.getElementById('promptInput').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (!document.getElementById('lightbox').classList.contains('hidden')) closeLightbox();
+        showToast(t('gallery.editLoaded'), 'success');
+      } catch (e) {
+        showToast(e.message || t('gallery.editFail'), 'error');
+      }
+    }
+
+    function applySizeFromValue(value) {
+      if (value === 'auto') { sizeState = { ...sizeState, mode: 'auto' }; renderSizeButton(); return; }
+      const m = /^(\d+)x(\d+)$/.exec(value);
+      if (!m) return;
+      const w = parseInt(m[1], 10);
+      const h = parseInt(m[2], 10);
+      sizeState = {
+        ...sizeState,
+        mode: 'custom',
+        customWidth: String(w),
+        customHeight: String(h),
+      };
+      renderSizeButton();
+    }
+
+    function renderGalleryPagination(data = {}) {
+      const pagination = document.getElementById('galleryPagination');
+      const prevBtn = document.getElementById('galleryPrevBtn');
+      const nextBtn = document.getElementById('galleryNextBtn');
+      const pageInfo = document.getElementById('galleryPageInfo');
+      const totalPages = data.total_pages || galleryTotalPages || 1;
+      const page = data.page || galleryPage || 1;
+
+      pagination.classList.toggle('hidden', totalPages <= 1);
+      prevBtn.disabled = !(data.has_prev ?? page > 1);
+      nextBtn.disabled = !(data.has_next ?? page < totalPages);
+      pageInfo.textContent = t('gallery.pageInfo', { page, total: totalPages });
+    }
+
+    function changeGalleryPage(delta) {
+      const nextPage = Math.min(Math.max(galleryPage + delta, 1), galleryTotalPages);
+      if (nextPage === galleryPage) return;
+      loadGallery(nextPage);
+    }
+
+    async function deleteImage(id) {
+      if (!confirm(t('gallery.confirmDelete'))) return;
+      try {
+        await apiFetch('/api/gallery/' + id, { method: 'DELETE' }, 'deleting image');
+        await loadGallery(galleryPage);
+        showToast(t('gallery.deleteSuccess'), 'success');
+      } catch (e) {
+        showToast(t('gallery.deleteFail', { msg: e.message }), 'error');
+      }
+    }
+
+    async function copyPrompt(event, button) {
+      event.stopPropagation();
+      try {
+        await copyText(button.dataset.prompt || '');
+        showToast(t('common.copied'), 'success');
+      } catch (e) {
+        showToast(t('common.copyFail'), 'error');
+      }
+    }
+
+    async function copyLightboxPrompt(event) {
+      event.stopPropagation();
+      try {
+        await copyText(activeLightboxImage?.prompt || '');
+        showToast(t('common.copied'), 'success');
+      } catch (e) {
+        showToast(t('common.copyFail'), 'error');
+      }
+    }
+
+    function editFromLightbox() {
+      if (!activeLightboxImage) return;
+      editImageFromGallery(activeLightboxImage.id);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return Promise.resolve();
+    }
+
+    function normalizeGalleryImage(img) {
+      const filename = img.filename
+        || (typeof img.image_url === 'string' && img.image_url.startsWith('/api/image/')
+              ? img.image_url.replace('/api/image/', '')
+              : '');
+      return {
+        id: img.id || '',
+        filename,
+        image_url: img.image_url || (filename ? '/api/image/' + filename : ''),
+        prompt: img.prompt || '',
+        created_at: img.created_at || '',
+        size: img.size || 'Unknown',
+        model: img.model || 'Unknown',
+        quality: img.quality || 'Unknown',
+        output_format: img.output_format || guessFormatFromFilename(img.filename || img.image_url),
+        output_compression: img.output_compression,
+        n: img.n,
+        api_path: img.api_path || 'Unknown',
+        is_public: img.is_public !== false,
+      };
+    }
+
+    function guessFormatFromFilename(filename) {
+      const ext = String(filename || '').split('.').pop()?.toLowerCase();
+      if (ext === 'jpg') return 'jpeg';
+      return ['png', 'jpeg', 'webp'].includes(ext) ? ext : 'Unknown';
+    }
+
+    function formatParameterValue(value) {
+      if (value === null || value === undefined || value === '') return t('common.notStored');
+      return String(value);
+    }
+
+    function renderParameter(label, value) {
+      return `
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/45 px-3 py-2.5">
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-zinc-600">${escapeHtml(label)}</dt>
+          <dd class="mt-1 break-words font-mono text-xs text-zinc-200">${escapeHtml(formatParameterValue(value))}</dd>
+        </div>`;
+    }
+
+    const LIGHTBOX_MIN_ZOOM = 1;
+    const LIGHTBOX_MAX_ZOOM = 8;
+    const lightboxZoom = { scale: 1, tx: 0, ty: 0 };
+
+    function applyLightboxTransform() {
+      const img = document.getElementById('lightboxImg');
+      const stage = document.getElementById('lightboxStage');
+      if (!img || !stage) return;
+      img.style.transform = `translate3d(${lightboxZoom.tx}px, ${lightboxZoom.ty}px, 0) scale(${lightboxZoom.scale})`;
+      stage.dataset.zoom = String(lightboxZoom.scale);
+      const label = document.getElementById('lightboxZoomLabel');
+      if (label) label.textContent = Math.round(lightboxZoom.scale * 100) + '%';
+      const out = document.getElementById('lightboxZoomOut');
+      const inBtn = document.getElementById('lightboxZoomIn');
+      if (out) out.disabled = lightboxZoom.scale <= LIGHTBOX_MIN_ZOOM + 1e-3;
+      if (inBtn) inBtn.disabled = lightboxZoom.scale >= LIGHTBOX_MAX_ZOOM - 1e-3;
+    }
+
+    function clampLightboxPan() {
+      const stage = document.getElementById('lightboxStage');
+      const img = document.getElementById('lightboxImg');
+      if (!stage || !img) return;
+      const rect = img.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const overflowX = Math.max(0, (rect.width - stageRect.width) / 2);
+      const overflowY = Math.max(0, (rect.height - stageRect.height) / 2);
+      lightboxZoom.tx = Math.max(-overflowX, Math.min(overflowX, lightboxZoom.tx));
+      lightboxZoom.ty = Math.max(-overflowY, Math.min(overflowY, lightboxZoom.ty));
+    }
+
+    function setLightboxZoom(scale, focal) {
+      const next = Math.max(LIGHTBOX_MIN_ZOOM, Math.min(LIGHTBOX_MAX_ZOOM, scale));
+      if (focal && next !== lightboxZoom.scale) {
+        const stage = document.getElementById('lightboxStage');
+        const img = document.getElementById('lightboxImg');
+        if (stage && img) {
+          const stageRect = stage.getBoundingClientRect();
+          const cx = focal.x - (stageRect.left + stageRect.width / 2);
+          const cy = focal.y - (stageRect.top + stageRect.height / 2);
+          const ratio = next / lightboxZoom.scale;
+          lightboxZoom.tx = (lightboxZoom.tx - cx) * ratio + cx;
+          lightboxZoom.ty = (lightboxZoom.ty - cy) * ratio + cy;
+        }
+      }
+      lightboxZoom.scale = next;
+      if (next === 1) { lightboxZoom.tx = 0; lightboxZoom.ty = 0; }
+      else clampLightboxPan();
+      applyLightboxTransform();
+    }
+
+    function setZoomLightbox(scale) { setLightboxZoom(scale); }
+    function zoomInLightbox() { setLightboxZoom(lightboxZoom.scale * 1.5); }
+    function zoomOutLightbox() { setLightboxZoom(lightboxZoom.scale / 1.5); }
+    function resetZoomLightbox() { setLightboxZoom(1); }
+
+    function attachLightboxInteractions() {
+      const stage = document.getElementById('lightboxStage');
+      if (!stage || stage.dataset.bound === '1') return;
+      stage.dataset.bound = '1';
+
+      stage.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+        setLightboxZoom(lightboxZoom.scale * delta, { x: e.clientX, y: e.clientY });
+      }, { passive: false });
+
+      stage.addEventListener('dblclick', (e) => {
+        if (lightboxZoom.scale > 1.1) setLightboxZoom(1);
+        else setLightboxZoom(2.5, { x: e.clientX, y: e.clientY });
+      });
+
+      const pointers = new Map();
+      let panStart = null;
+      let pinchStart = null;
+
+      stage.addEventListener('pointerdown', (e) => {
+        stage.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size === 1 && lightboxZoom.scale > 1) {
+          panStart = { x: e.clientX, y: e.clientY, tx: lightboxZoom.tx, ty: lightboxZoom.ty };
+          stage.classList.add('is-panning');
+        } else if (pointers.size === 2) {
+          panStart = null;
+          stage.classList.remove('is-panning');
+          stage.classList.add('is-pinching');
+          const pts = [...pointers.values()];
+          const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          pinchStart = { dist, scale: lightboxZoom.scale, cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2 };
+        }
+      });
+
+      stage.addEventListener('pointermove', (e) => {
+        if (!pointers.has(e.pointerId)) return;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinchStart && pointers.size === 2) {
+          const pts = [...pointers.values()];
+          const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          if (pinchStart.dist > 0) {
+            setLightboxZoom(pinchStart.scale * (dist / pinchStart.dist), { x: pinchStart.cx, y: pinchStart.cy });
+          }
+        } else if (panStart && pointers.size === 1) {
+          lightboxZoom.tx = panStart.tx + (e.clientX - panStart.x);
+          lightboxZoom.ty = panStart.ty + (e.clientY - panStart.y);
+          clampLightboxPan();
+          applyLightboxTransform();
+        }
+      });
+
+      const endPointer = (e) => {
+        pointers.delete(e.pointerId);
+        if (pointers.size < 2) { pinchStart = null; stage.classList.remove('is-pinching'); }
+        if (pointers.size === 0) { panStart = null; stage.classList.remove('is-panning'); }
+      };
+      stage.addEventListener('pointerup', endPointer);
+      stage.addEventListener('pointercancel', endPointer);
+      stage.addEventListener('pointerleave', endPointer);
+    }
+
+    const PREVIEW_MIN_ZOOM = 1;
+    const PREVIEW_MAX_ZOOM = 8;
+    const previewZoom = { scale: 1, tx: 0, ty: 0 };
+
+    function applyPreviewTransform() {
+      const img = document.getElementById('previewImage');
+      const stage = document.getElementById('previewStage');
+      if (!img || !stage) return;
+      img.style.transform = `translate3d(${previewZoom.tx}px, ${previewZoom.ty}px, 0) scale(${previewZoom.scale})`;
+      stage.dataset.zoom = String(previewZoom.scale);
+      const label = document.getElementById('previewZoomLabel');
+      if (label) label.textContent = Math.round(previewZoom.scale * 100) + '%';
+      const out = document.getElementById('previewZoomOut');
+      const inBtn = document.getElementById('previewZoomIn');
+      if (out) out.disabled = previewZoom.scale <= PREVIEW_MIN_ZOOM + 1e-3;
+      if (inBtn) inBtn.disabled = previewZoom.scale >= PREVIEW_MAX_ZOOM - 1e-3;
+    }
+
+    function clampPreviewPan() {
+      const stage = document.getElementById('previewStage');
+      const img = document.getElementById('previewImage');
+      if (!stage || !img) return;
+      const rect = img.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const overflowX = Math.max(0, (rect.width - stageRect.width) / 2);
+      const overflowY = Math.max(0, (rect.height - stageRect.height) / 2);
+      previewZoom.tx = Math.max(-overflowX, Math.min(overflowX, previewZoom.tx));
+      previewZoom.ty = Math.max(-overflowY, Math.min(overflowY, previewZoom.ty));
+    }
+
+    function setPreviewZoom(scale, focal) {
+      const next = Math.max(PREVIEW_MIN_ZOOM, Math.min(PREVIEW_MAX_ZOOM, scale));
+      if (focal && next !== previewZoom.scale) {
+        const stage = document.getElementById('previewStage');
+        const img = document.getElementById('previewImage');
+        if (stage && img) {
+          const stageRect = stage.getBoundingClientRect();
+          const cx = focal.x - (stageRect.left + stageRect.width / 2);
+          const cy = focal.y - (stageRect.top + stageRect.height / 2);
+          const ratio = next / previewZoom.scale;
+          previewZoom.tx = (previewZoom.tx - cx) * ratio + cx;
+          previewZoom.ty = (previewZoom.ty - cy) * ratio + cy;
+        }
+      }
+      previewZoom.scale = next;
+      if (next === 1) { previewZoom.tx = 0; previewZoom.ty = 0; }
+      else clampPreviewPan();
+      applyPreviewTransform();
+    }
+
+    function setZoomPreview(scale) { setPreviewZoom(scale); }
+    function zoomInPreview() { setPreviewZoom(previewZoom.scale * 1.5); }
+    function zoomOutPreview() { setPreviewZoom(previewZoom.scale / 1.5); }
+    function resetZoomPreview() { setPreviewZoom(1); }
+
+    function attachPreviewInteractions() {
+      const stage = document.getElementById('previewStage');
+      if (!stage || stage.dataset.bound === '1') return;
+      stage.dataset.bound = '1';
+
+      stage.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+        setPreviewZoom(previewZoom.scale * delta, { x: e.clientX, y: e.clientY });
+      }, { passive: false });
+
+      stage.addEventListener('dblclick', (e) => {
+        if (previewZoom.scale > 1.1) setPreviewZoom(1);
+        else setPreviewZoom(2.5, { x: e.clientX, y: e.clientY });
+      });
+
+      const pointers = new Map();
+      let panStart = null;
+      let pinchStart = null;
+
+      stage.addEventListener('pointerdown', (e) => {
+        stage.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pointers.size === 1 && previewZoom.scale > 1) {
+          panStart = { x: e.clientX, y: e.clientY, tx: previewZoom.tx, ty: previewZoom.ty };
+          stage.classList.add('is-panning');
+        } else if (pointers.size === 2) {
+          panStart = null;
+          stage.classList.remove('is-panning');
+          stage.classList.add('is-pinching');
+          const pts = [...pointers.values()];
+          const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          pinchStart = { dist, scale: previewZoom.scale, cx: (pts[0].x + pts[1].x) / 2, cy: (pts[0].y + pts[1].y) / 2 };
+        }
+      });
+
+      stage.addEventListener('pointermove', (e) => {
+        if (!pointers.has(e.pointerId)) return;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinchStart && pointers.size === 2) {
+          const pts = [...pointers.values()];
+          const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          if (pinchStart.dist > 0) {
+            setPreviewZoom(pinchStart.scale * (dist / pinchStart.dist), { x: pinchStart.cx, y: pinchStart.cy });
+          }
+        } else if (panStart && pointers.size === 1) {
+          previewZoom.tx = panStart.tx + (e.clientX - panStart.x);
+          previewZoom.ty = panStart.ty + (e.clientY - panStart.y);
+          clampPreviewPan();
+          applyPreviewTransform();
+        }
+      });
+
+      const endPointer = (e) => {
+        pointers.delete(e.pointerId);
+        if (pointers.size < 2) { pinchStart = null; stage.classList.remove('is-pinching'); }
+        if (pointers.size === 0) { panStart = null; stage.classList.remove('is-panning'); }
+      };
+      stage.addEventListener('pointerup', endPointer);
+      stage.addEventListener('pointercancel', endPointer);
+      stage.addEventListener('pointerleave', endPointer);
+    }
+
+    function openLightbox(imageId) {
+      const image = galleryById.get(imageId);
+      if (!image) return;
+
+      activeLightboxImage = image;
+      const lightboxImg = document.getElementById('lightboxImg');
+      lightboxImg.src = image.image_url || ('/api/image/' + image.filename);
+      lightboxImg.alt = image.prompt || '';
+      document.getElementById('lightboxPrompt').textContent = image.prompt || t('common.notStored');
+      const localeStr = currentLang === 'zh' ? 'zh-CN' : 'en-US';
+      document.getElementById('lightboxCreatedAt').textContent = image.created_at
+        ? new Date(image.created_at).toLocaleString(localeStr, {
+            month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+          })
+        : '';
+      const publicValue = image.is_public === false ? t('param.public.no') : t('param.public.yes');
+      document.getElementById('lightboxParams').innerHTML = [
+        renderParameter(t('param.model'), image.model),
+        renderParameter(t('param.size'), image.size),
+        renderParameter(t('param.quality'), image.quality),
+        renderParameter(t('param.outputFormat'), image.output_format),
+        renderParameter(t('param.outputCompression'), image.output_compression),
+        renderParameter(t('param.quantity'), image.n),
+        renderParameter(t('param.apiPath'), image.api_path),
+        renderParameter(t('param.public'), publicValue),
+      ].join('');
+
+      lightboxZoom.scale = 1; lightboxZoom.tx = 0; lightboxZoom.ty = 0;
+      applyLightboxTransform();
+      attachLightboxInteractions();
+
+      document.getElementById('lightbox').classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.add('hidden');
+      document.getElementById('lightboxImg').removeAttribute('src');
+      activeLightboxImage = null;
+      lightboxZoom.scale = 1; lightboxZoom.tx = 0; lightboxZoom.ty = 0;
+      applyLightboxTransform();
+      document.body.style.overflow = '';
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function escapeAttribute(str) {
+      return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    document.addEventListener('keydown', (e) => {
+      const lightboxOpen = !document.getElementById('lightbox').classList.contains('hidden');
+      if (e.key === 'Escape') {
+        if (lightboxOpen) {
+          closeLightbox();
+        } else if (!document.getElementById('sizeDialog').classList.contains('hidden')) {
+          closeSizeDialog();
+        } else if (!document.getElementById('settingsDrawer').classList.contains('hidden')) {
+          toggleSettings();
+        } else if (!document.getElementById('adminModal').classList.contains('hidden')) {
+          closeAdminModal();
+        }
+        return;
+      }
+      if (lightboxOpen) {
+        if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomInLightbox(); }
+        else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomOutLightbox(); }
+        else if (e.key === '0') { e.preventDefault(); resetZoomLightbox(); }
+        else if (e.key === '1') { e.preventDefault(); setZoomLightbox(1); }
+      }
+    });
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', attachPreviewInteractions);
+    } else {
+      attachPreviewInteractions();
+    }
+  </script>
+</body>
+</html>

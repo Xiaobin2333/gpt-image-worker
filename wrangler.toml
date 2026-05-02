@@ -1,0 +1,45 @@
+name = "gpt-image-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[assets]
+directory = "./static"
+binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "gpt-image-bucket"
+
+[[kv_namespaces]]
+binding = "SETTINGS"
+id = "REPLACE_WITH_YOUR_SETTINGS_KV_ID"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gpt-image-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+DEFAULT_API_URL = ""
+DEFAULT_API_PATH = "/v1/images/generations"
+DEFAULT_RESPONSES_MODEL = "gpt-5.4"
+ACCESS_KEY_COOKIE_NAME = "gpt_image_access"
+ACCESS_KEY_SESSION_MINUTES = "180"
+ADMIN_KEY_COOKIE_NAME = "gpt_image_admin"
+ADMIN_KEY_SESSION_MINUTES = "180"
+OWNER_COOKIE_NAME = "gpt_image_owner"
+IP_ALLOWLIST = ""
+TRUST_PROXY_HEADERS = "false"
+MAX_FILE_SIZE_MB = "50"
+# Optional: a custom domain bound to your R2 bucket so public images are served
+# directly from R2 (bypassing the Worker for huge bandwidth savings on the free
+# plan). Leave empty to always serve images through the Worker.
+R2_PUBLIC_DOMAIN = ""

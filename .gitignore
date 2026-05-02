@@ -1,0 +1,12 @@
+CLAUDE.md
+.DS_Store
+
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+*.log
+
+release/
+*.zip
