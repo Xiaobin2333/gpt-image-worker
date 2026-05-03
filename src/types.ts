@@ -28,6 +28,8 @@ export interface RuntimeSettings {
   api_path: ApiPath;
 }
 
+export type ResponseFormat = "b64_json" | "url" | "none";
+
 export interface GenerateRequestBody {
   prompt: string;
   size: string;
@@ -36,6 +38,7 @@ export interface GenerateRequestBody {
   quality: "auto" | "low" | "medium" | "high";
   output_format: "png" | "jpeg" | "webp";
   output_compression?: number | null;
+  response_format?: ResponseFormat;
   reference_images?: string[];
   is_public?: boolean;
 }
@@ -51,6 +54,7 @@ export interface GalleryEntry {
   quality?: string;
   output_format?: string;
   output_compression?: number | null;
+  response_format?: string;
   n?: number;
   api_path?: string;
   is_public: boolean;
@@ -77,6 +81,7 @@ export interface GenerateResponse {
   quality?: string;
   output_format?: string;
   output_compression?: number | null;
+  response_format?: string;
   n?: number;
   api_path?: string;
   is_public: boolean;

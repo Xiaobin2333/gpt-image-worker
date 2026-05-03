@@ -26,7 +26,7 @@ import {
   saveJob,
   tryClaimJob,
 } from "./storage";
-import { LIMITS_BOUNDS, loadAccessLock, loadRateLimitConfig, loadRuntimeLimits, loadSettings, loadTurnstileConfig, maskKey, normalizeApiPath, saveAccessLock, saveRateLimitConfig, saveRuntimeLimits, saveSettings, saveTurnstileConfig } from "./settings";
+import { LIMITS_BOUNDS, activateApiPreset, createApiPreset, deleteApiPreset, getActivePresetFromState, loadAccessLock, loadApiSettingsState, loadRateLimitConfig, loadRuntimeLimits, loadSettings, loadTurnstileConfig, maskKey, normalizeApiPath, saveAccessLock, saveRateLimitConfig, saveRuntimeLimits, saveSettings, saveTurnstileConfig, type ApiPreset, type ApiSettingsState } from "./settings";
 import { verifyTurnstileToken } from "./turnstile";
 import { checkRateLimit, pruneRateLimits } from "./ratelimit";
 import type { Bindings, GalleryEntry, GenerateJob, GenerateResponse } from "./types";
@@ -101,6 +101,7 @@ function buildGenerateResponse(domain: string, entries: GalleryEntry[]): Generat
     quality: primary.quality,
     output_format: primary.output_format,
     output_compression: primary.output_compression ?? null,
+    response_format: primary.response_format,
     n: primary.n,
     api_path: primary.api_path,
     is_public: primary.is_public,
@@ -418,15 +419,34 @@ async function requireAdmin(c: AppContext): Promise<Response | null> {
   return null;
 }
 
+function serializePreset(preset: ApiPreset) {
+  return {
+    id: preset.id,
+    name: preset.name,
+    api_url: preset.api_url,
+    api_path: preset.api_path,
+    api_key_masked: maskKey(preset.api_key),
+    has_api_key: !!preset.api_key,
+  };
+}
+
+function buildSettingsResponse(state: ApiSettingsState) {
+  const active = getActivePresetFromState(state);
+  return {
+    active_preset_id: active.id,
+    api_url: active.api_url,
+    api_key_masked: maskKey(active.api_key),
+    has_api_key: !!active.api_key,
+    api_path: active.api_path,
+    presets: state.presets.map(serializePreset),
+  };
+}
+
 app.get("/api/settings", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
-  const s = await loadSettings(c.env);
-  return c.json({
-    api_url: s.api_url,
-    api_key_masked: maskKey(s.api_key),
-    api_path: s.api_path,
-  });
+  const state = await loadApiSettingsState(c.env);
+  return c.json(buildSettingsResponse(state));
 });
 
 app.post("/api/settings", async (c) => {
@@ -445,8 +465,62 @@ app.post("/api/settings", async (c) => {
     : typeof raw.api_key === "string" ? raw.api_key
     : null;
   const apiPath = normalizeApiPath(typeof raw.api_path === "string" ? raw.api_path : undefined);
-  await saveSettings(c.env, { api_url: apiUrl, api_key: apiKey, api_path: apiPath });
-  return c.json({ status: "ok", message: "Settings updated" });
+  const activePresetId = typeof raw.active_preset_id === "string" ? raw.active_preset_id : null;
+  const presetName = typeof raw.preset_name === "string" ? raw.preset_name : null;
+  await saveSettings(c.env, {
+    active_preset_id: activePresetId,
+    preset_name: presetName,
+    api_url: apiUrl,
+    api_key: apiKey,
+    api_path: apiPath,
+  });
+  const state = await loadApiSettingsState(c.env);
+  return c.json(buildSettingsResponse(state));
+});
+
+app.post("/api/settings/presets", async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  let raw: Record<string, unknown>;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return jsonError(400, "Request body must be JSON");
+  }
+  const name = typeof raw.name === "string" ? raw.name : null;
+  const apiUrl = typeof raw.api_url === "string" ? raw.api_url : null;
+  const apiKey = typeof raw.api_key === "string" ? raw.api_key : null;
+  const apiPath = typeof raw.api_path === "string" ? raw.api_path : null;
+  const sourcePresetId = typeof raw.source_preset_id === "string" ? raw.source_preset_id : null;
+  const { state } = await createApiPreset(c.env, {
+    name,
+    api_url: apiUrl,
+    api_key: apiKey,
+    api_path: apiPath,
+    source_preset_id: sourcePresetId,
+  });
+  return c.json(buildSettingsResponse(state));
+});
+
+app.post("/api/settings/presets/:id/activate", async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const id = c.req.param("id");
+  const state = await activateApiPreset(c.env, id);
+  if (!state) return jsonError(404, "Preset not found");
+  return c.json(buildSettingsResponse(state));
+});
+
+app.delete("/api/settings/presets/:id", async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const id = c.req.param("id");
+  const { state, error } = await deleteApiPreset(c.env, id);
+  if (!state) {
+    const status = error === "Preset not found" ? 404 : 400;
+    return jsonError(status, error ?? "Failed to delete preset");
+  }
+  return c.json(buildSettingsResponse(state));
 });
 
 app.post("/api/generate", async (c) => {
@@ -625,7 +699,19 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           sendEvent("done", { result });
         } catch (e) {
           const detail = e instanceof Error ? e.message : String(e);
-          console.error("stream job failed", { jobId, detail });
+          console.error("stream job failed", {
+            jobId,
+            detail,
+            error_type: e instanceof Error ? e.name : typeof e,
+            api_url: settings.api_url,
+            api_path: settings.api_path,
+            model: input.payload.model,
+            size: input.payload.size,
+            quality: input.payload.quality,
+            output_format: input.payload.output_format,
+            response_format: input.payload.response_format,
+            n: input.payload.n,
+          });
           await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
           sendEvent("error", { detail });
         } finally {
@@ -836,7 +922,19 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    console.error("cron job failed", { jobId, detail });
+    console.error("cron job failed", {
+      jobId,
+      detail,
+      error_type: e instanceof Error ? e.name : typeof e,
+      api_url: settings.api_url,
+      api_path: settings.api_path,
+      model: input.payload.model,
+      size: input.payload.size,
+      quality: input.payload.quality,
+      output_format: input.payload.output_format,
+      response_format: input.payload.response_format,
+      n: input.payload.n,
+    });
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
   } finally {
     clearTimeout(timer);

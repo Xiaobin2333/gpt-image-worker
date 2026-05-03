@@ -221,6 +221,10 @@
       border-color: #10b981;
       box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
     }
+    .settings-presets-shell {
+      min-height: 88px;
+      max-height: min(34vh, 280px);
+    }
     .gallery-card { position: relative; transition: transform 0.2s, box-shadow 0.2s; }
     .gallery-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
     .gallery-select-handle {
@@ -496,7 +500,7 @@
   <!-- Settings Drawer -->
   <div id="settingsDrawer" class="fixed inset-0 z-50 hidden">
     <div class="drawer-backdrop absolute inset-0" onclick="toggleSettings()"></div>
-    <div class="absolute right-0 top-0 h-full w-full max-w-md bg-zinc-900 border-l border-zinc-800 shadow-2xl flex flex-col fade-in">
+    <div class="absolute right-0 top-0 h-full w-full max-w-lg bg-zinc-900 border-l border-zinc-800 shadow-2xl flex flex-col fade-in">
       <div class="p-5 border-b border-zinc-800 flex items-center justify-between">
         <h2 class="text-lg font-semibold text-zinc-100" data-i18n="settings.title">设置</h2>
         <button onclick="toggleSettings()" class="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
@@ -516,6 +520,31 @@
             <svg class="settings-summary-caret w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </summary>
           <div class="settings-section-body space-y-4">
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <label class="block text-sm font-medium text-zinc-300" data-i18n="settings.presets">预设</label>
+                <div class="flex gap-2">
+                  <button type="button" onclick="createApiPreset()"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors" data-i18n="settings.presetNew">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    <span data-i18n="settings.presetNewLabel">新建</span>
+                  </button>
+                  <button type="button" id="deletePresetBtn" onclick="deleteActiveApiPreset()"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-400 hover:text-red-300 hover:bg-red-950/30 hover:border-red-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-400 disabled:hover:bg-transparent disabled:hover:border-zinc-700">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    <span data-i18n="settings.presetDeleteLabel">删除</span>
+                  </button>
+                </div>
+              </div>
+              <div class="settings-presets-shell overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/30 p-2">
+                <div id="settingsPresetsList" class="space-y-2"></div>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.presetName">预设名称</label>
+              <input type="text" id="settingsPresetName" placeholder="Default"
+                class="settings-input">
+            </div>
             <div>
               <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.apiUrl">API Base URL</label>
               <input type="url" id="settingsApiUrl" placeholder="https://api.example.com"
@@ -786,34 +815,30 @@
           <p id="referenceTip" class="mt-1.5 text-xs text-zinc-500"></p>
         </div>
 
-        <div class="flex flex-col sm:flex-row gap-4">
-          <div class="flex-1">
+        <div>
+          <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.model">模型</label>
+          <select id="modelSelect" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <option value="gpt-image-2">gpt-image-2</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
+          <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.size">图像尺寸</label>
             <button id="sizeSelect" type="button" value="auto" onclick="openSizeDialog()"
-              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-left text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-              <span class="flex items-center justify-between gap-3">
-                <span class="min-w-0">
-                  <span id="sizeSelectLabel" class="block font-medium truncate">auto</span>
-                  <span id="sizeSelectMeta" class="block text-xs text-zinc-500 truncate">Auto</span>
-                </span>
+              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-left text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+              <span class="flex items-center justify-between gap-2">
+                <span id="sizeSelectLabel" class="truncate">auto</span>
                 <svg class="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6"/>
                 </svg>
               </span>
+              <span id="sizeSelectMeta" class="hidden"></span>
             </button>
           </div>
-          <div class="flex-1">
-            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.model">模型</label>
-            <select id="modelSelect" class="w-full min-h-[62px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
-              <option value="gpt-image-2">gpt-image-2</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.quality">质量</label>
-            <select id="qualitySelect" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <select id="qualitySelect" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
               <option value="auto" data-i18n="quality.auto">自动</option>
               <option value="low" data-i18n="quality.low">低</option>
               <option value="medium" data-i18n="quality.medium">中</option>
@@ -822,7 +847,7 @@
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.format">格式</label>
-            <select id="formatSelect" onchange="handleOutputFormatChange()" class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+            <select id="formatSelect" onchange="handleOutputFormatChange()" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
               <option value="png">PNG</option>
               <option value="jpeg">JPEG</option>
               <option value="webp">WebP</option>
@@ -831,12 +856,20 @@
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.compression">压缩</label>
             <input id="compressionInput" type="number" min="0" max="100" step="1" value="" data-i18n-attr="placeholder:generate.compressionDisabled" placeholder="PNG 不可用" disabled
-              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.quantity">数量</label>
             <input id="quantityInput" type="number" min="1" max="10" step="1" value="1"
-              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+              class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.responseFormat">响应格式</label>
+            <select id="responseFormatSelect" class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors cursor-pointer appearance-none">
+              <option value="b64_json">b64_json</option>
+              <option value="url">url</option>
+              <option value="none" data-i18n="responseFormat.none">none</option>
+            </select>
           </div>
         </div>
 
@@ -917,6 +950,14 @@
             <button type="button" data-scope="all" onclick="setGalleryScope('all')" class="gallery-scope-btn px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-100" data-i18n="gallery.scope.all">全部</button>
           </div>
           <span id="galleryCount" class="text-xs text-zinc-600"></span>
+          <button id="downloadAllBtn" type="button" onclick="downloadGalleryAsZip()"
+            class="px-3 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-xs font-medium hover:bg-zinc-700 transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-i18n-attr="title:gallery.downloadAllTitle" title="下载全部图片为 ZIP">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span data-i18n="gallery.downloadAll">下载全部</span>
+          </button>
         </div>
       </div>
 
@@ -1009,6 +1050,10 @@
                   <button type="button" onclick="editFromLightbox()"
                     class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-xs font-medium hover:bg-emerald-600/30 transition-colors" data-i18n="lightbox.edit">
                     编辑此图
+                  </button>
+                  <button type="button" onclick="copyLightboxImageUrl(event)"
+                    class="px-2.5 py-1.5 rounded-lg bg-sky-600/20 text-sky-300 text-xs font-medium hover:bg-sky-600/30 transition-colors" data-i18n="lightbox.copyUrl">
+                    复制链接
                   </button>
                   <button type="button" onclick="copyLightboxPrompt(event)"
                     class="px-2.5 py-1.5 rounded-lg bg-zinc-800 text-xs font-medium text-zinc-300 hover:bg-zinc-700 transition-colors" data-i18n="common.copy">
@@ -1240,6 +1285,7 @@
         'generate.referenceHint': '（可选，最多 {count} 张）',
         'generate.referenceTip': '可上传或粘贴/拖拽（PNG/JPEG/WebP）。最多 {count} 张，每张 ≤ {mb}MB；上传后切换为图生图。',
         'generate.referenceTipDisabled': '管理员已禁用参考图上传。',
+        'generate.addReference': '添加参考图',
         'generate.size': '图像尺寸',
         'generate.model': '模型',
         'generate.quality': '质量',
@@ -1247,6 +1293,26 @@
         'generate.compression': '压缩',
         'generate.compressionDisabled': 'PNG 不可用',
         'generate.quantity': '数量',
+        'generate.responseFormat': '响应格式',
+        'responseFormat.none': '不指定',
+        'settings.presets': '预设',
+        'settings.presetNew': '新建',
+        'settings.presetNewLabel': '新建',
+        'settings.presetDeleteLabel': '删除',
+        'settings.presetName': '预设名称',
+        'settings.presetsEmpty': '暂无预设',
+        'settings.presetActive': '使用中',
+        'settings.presetSwitch': '切换',
+        'settings.presetUntitled': '未命名预设',
+        'settings.presetNoUrl': '未填 API URL',
+        'settings.presetNoKey': '未填 API Key',
+        'settings.presetSwitched': '已切换预设',
+        'settings.presetSwitchFail': '切换预设失败',
+        'settings.presetCreated': '已创建预设',
+        'settings.presetCreateFail': '创建预设失败',
+        'settings.presetDeleted': '已删除预设',
+        'settings.presetDeleteFail': '删除预设失败',
+        'settings.presetConfirmDelete': '删除预设「{name}」？',
         'generate.action': '生成',
         'generate.generating': '生成中…',
         'generate.public': '公开到图库',
@@ -1288,6 +1354,14 @@
         'gallery.editTitle': '编辑此图（参考 + 回填参数）',
         'gallery.deleteTitle': '删除',
         'gallery.copyTitle': '复制提示词',
+        'gallery.copyUrlTitle': '复制图片链接',
+        'gallery.copyUrlSuccess': '已复制图片链接',
+        'gallery.downloadAll': '下载全部',
+        'gallery.downloadAllTitle': '下载全部图片为 ZIP',
+        'gallery.downloadAllPacking': '打包中…',
+        'gallery.downloadAllEmpty': '图库为空',
+        'gallery.downloadAllDone': '已打包 {n} 张图片',
+        'gallery.downloadAllFail': '打包失败',
         'gallery.confirmDelete': '确定要从图库中删除此图吗？',
         'gallery.deleteSuccess': '已删除',
         'gallery.deleteFail': '删除失败：{msg}',
@@ -1302,6 +1376,7 @@
         'lightbox.prompt': '提示词',
         'lightbox.parameters': '参数',
         'lightbox.edit': '编辑此图',
+        'lightbox.copyUrl': '复制链接',
         'common.cancel': '取消',
         'common.save': '保存',
         'common.copy': '复制',
@@ -1316,6 +1391,7 @@
         'param.outputFormat': '输出格式',
         'param.outputCompression': '输出压缩',
         'param.quantity': '数量',
+        'param.responseFormat': '响应格式',
         'param.apiPath': 'API Path',
         'param.public': '公开',
         'param.public.yes': '是',
@@ -1462,6 +1538,26 @@
         'generate.compression': 'Compression',
         'generate.compressionDisabled': 'Disabled for PNG',
         'generate.quantity': 'Quantity',
+        'generate.responseFormat': 'Response Format',
+        'responseFormat.none': 'none',
+        'settings.presets': 'Presets',
+        'settings.presetNew': 'New',
+        'settings.presetNewLabel': 'New',
+        'settings.presetDeleteLabel': 'Delete',
+        'settings.presetName': 'Preset Name',
+        'settings.presetsEmpty': 'No presets',
+        'settings.presetActive': 'Active',
+        'settings.presetSwitch': 'Switch',
+        'settings.presetUntitled': 'Untitled preset',
+        'settings.presetNoUrl': 'No API URL',
+        'settings.presetNoKey': 'No API key',
+        'settings.presetSwitched': 'Preset switched',
+        'settings.presetSwitchFail': 'Failed to switch preset',
+        'settings.presetCreated': 'Preset created',
+        'settings.presetCreateFail': 'Failed to create preset',
+        'settings.presetDeleted': 'Preset deleted',
+        'settings.presetDeleteFail': 'Failed to delete preset',
+        'settings.presetConfirmDelete': 'Delete preset "{name}"?',
         'generate.action': 'Generate',
         'generate.generating': 'Generating…',
         'generate.public': 'Publish to public gallery',
@@ -1503,6 +1599,14 @@
         'gallery.editTitle': 'Edit (use as reference + prefill params)',
         'gallery.deleteTitle': 'Delete',
         'gallery.copyTitle': 'Copy prompt',
+        'gallery.copyUrlTitle': 'Copy image URL',
+        'gallery.copyUrlSuccess': 'Image URL copied',
+        'gallery.downloadAll': 'Download All',
+        'gallery.downloadAllTitle': 'Download all gallery images as a ZIP',
+        'gallery.downloadAllPacking': 'Packing…',
+        'gallery.downloadAllEmpty': 'Gallery is empty',
+        'gallery.downloadAllDone': 'Packed {n} images',
+        'gallery.downloadAllFail': 'Failed to pack',
         'gallery.confirmDelete': 'Delete this image from the gallery?',
         'gallery.deleteSuccess': 'Deleted',
         'gallery.deleteFail': 'Failed to delete: {msg}',
@@ -1517,6 +1621,7 @@
         'lightbox.prompt': 'Prompt',
         'lightbox.parameters': 'Parameters',
         'lightbox.edit': 'Edit this image',
+        'lightbox.copyUrl': 'Copy URL',
         'common.cancel': 'Cancel',
         'common.save': 'Save',
         'common.copy': 'Copy',
@@ -1531,6 +1636,7 @@
         'param.outputFormat': 'Output Format',
         'param.outputCompression': 'Output Compression',
         'param.quantity': 'Quantity',
+        'param.responseFormat': 'Response Format',
         'param.apiPath': 'API Path',
         'param.public': 'Public',
         'param.public.yes': 'Yes',
@@ -2050,6 +2156,113 @@
       showToast(t('admin.loggedOut'), 'success');
     }
 
+    let apiSettingsState = { active_preset_id: null, presets: [] };
+    const MASKED_API_KEY_VALUE = '••••••••';
+
+    function getActiveApiPreset() {
+      return apiSettingsState.presets.find((p) => p.id === apiSettingsState.active_preset_id)
+        || apiSettingsState.presets[0]
+        || null;
+    }
+
+    function syncApiSettingsState(data) {
+      apiSettingsState = {
+        active_preset_id: data.active_preset_id || null,
+        presets: Array.isArray(data.presets) ? data.presets : [],
+      };
+      const active = getActiveApiPreset();
+      const apiUrl = active?.api_url || data.api_url || '';
+      const apiPath = active?.api_path || data.api_path || '/v1/images/generations';
+      const hasKey = !!(active?.has_api_key ?? data.has_api_key);
+      document.getElementById('settingsPresetName').value = active?.name || '';
+      document.getElementById('settingsApiUrl').value = apiUrl;
+      document.getElementById('settingsApiPath').value = apiPath;
+      document.getElementById('settingsApiKey').value = hasKey ? MASKED_API_KEY_VALUE : '';
+      renderApiPresets();
+    }
+
+    function renderApiPresets() {
+      const list = document.getElementById('settingsPresetsList');
+      const deleteBtn = document.getElementById('deletePresetBtn');
+      if (!list || !deleteBtn) return;
+      deleteBtn.disabled = apiSettingsState.presets.length <= 1;
+      if (!apiSettingsState.presets.length) {
+        list.innerHTML = `<div class="rounded-md border border-dashed border-zinc-700 px-3 py-3 text-sm text-zinc-500">${escapeHtml(t('settings.presetsEmpty'))}</div>`;
+        return;
+      }
+      list.innerHTML = apiSettingsState.presets.map((preset) => {
+        const active = preset.id === apiSettingsState.active_preset_id;
+        const wrapClasses = active
+          ? 'border-emerald-500/70 bg-emerald-500/10 text-zinc-100'
+          : 'border-zinc-800 bg-zinc-950/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/70';
+        const badgeClasses = active
+          ? 'border-emerald-500/40 text-emerald-300'
+          : 'border-zinc-700 text-zinc-500';
+        const badgeText = active ? t('settings.presetActive') : t('settings.presetSwitch');
+        const keyLabel = preset.has_api_key ? preset.api_key_masked : t('settings.presetNoKey');
+        return `
+          <button type="button" onclick="activateApiPreset('${escapeAttribute(preset.id)}')"
+            class="w-full text-left rounded-md border ${wrapClasses} px-3 py-2.5 transition-colors">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-medium">${escapeHtml(preset.name || t('settings.presetUntitled'))}</div>
+                <div class="mt-1 truncate text-xs font-mono text-zinc-500">${escapeHtml(preset.api_url || t('settings.presetNoUrl'))}</div>
+              </div>
+              <span class="shrink-0 rounded-md border ${badgeClasses} px-2 py-0.5 text-[11px] font-medium">${escapeHtml(badgeText)}</span>
+            </div>
+            <div class="mt-2 flex items-center justify-between gap-3 text-xs text-zinc-500">
+              <span class="truncate font-mono">${escapeHtml(preset.api_path || '/v1/images/generations')}</span>
+              <span class="shrink-0 font-mono">${escapeHtml(keyLabel)}</span>
+            </div>
+          </button>`;
+      }).join('');
+    }
+
+    async function activateApiPreset(presetId) {
+      if (!presetId || presetId === apiSettingsState.active_preset_id) return;
+      try {
+        const data = await apiFetch(`/api/settings/presets/${encodeURIComponent(presetId)}/activate`, {
+          method: 'POST',
+        }, 'switching preset');
+        syncApiSettingsState(data);
+        showToast(t('settings.presetSwitched'), 'success');
+      } catch (e) {
+        showToast(t('settings.presetSwitchFail') + ': ' + e.message, 'error');
+      }
+    }
+
+    async function createApiPreset() {
+      try {
+        const data = await apiFetch('/api/settings/presets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_preset_id: apiSettingsState.active_preset_id }),
+        }, 'creating preset');
+        syncApiSettingsState(data);
+        showToast(t('settings.presetCreated'), 'success');
+        const nameInput = document.getElementById('settingsPresetName');
+        nameInput.focus();
+        nameInput.select();
+      } catch (e) {
+        showToast(t('settings.presetCreateFail') + ': ' + e.message, 'error');
+      }
+    }
+
+    async function deleteActiveApiPreset() {
+      const active = getActiveApiPreset();
+      if (!active || apiSettingsState.presets.length <= 1) return;
+      if (!confirm(t('settings.presetConfirmDelete', { name: active.name || t('settings.presetUntitled') }))) return;
+      try {
+        const data = await apiFetch(`/api/settings/presets/${encodeURIComponent(active.id)}`, {
+          method: 'DELETE',
+        }, 'deleting preset');
+        syncApiSettingsState(data);
+        showToast(t('settings.presetDeleted'), 'success');
+      } catch (e) {
+        showToast(t('settings.presetDeleteFail') + ': ' + e.message, 'error');
+      }
+    }
+
     async function loadSettings() {
       try {
         const [api, lock, ts, rl, lim] = await Promise.allSettled([
@@ -2060,11 +2273,7 @@
           apiFetch('/api/admin/limits', {}, 'loading limits'),
         ]);
         if (api.status === 'fulfilled') {
-          const data = api.value;
-          if (data.api_url) document.getElementById('settingsApiUrl').value = data.api_url;
-          document.getElementById('settingsApiPath').value = data.api_path || '/v1/images/generations';
-          document.getElementById('settingsApiKey').value =
-            data.api_key_masked && data.api_key_masked !== '***' ? '••••••••' : '';
+          syncApiSettingsState(api.value);
         }
         if (lock.status === 'fulfilled') {
           cachedAccessLock = lock.value;
@@ -2189,8 +2398,14 @@
       const limAdminMin = clampSetting('settingsAdminSessionMin', 5, 10080, 180);
       if (clampedAny) showToast(t('settings.clamped'), 'success');
 
-      const apiBody = { api_url: apiUrl, api_path: apiPath };
-      apiBody.api_key = apiKey === '••••••••' ? null : apiKey;
+      const presetName = document.getElementById('settingsPresetName').value.trim();
+      const apiBody = {
+        active_preset_id: apiSettingsState.active_preset_id,
+        preset_name: presetName,
+        api_url: apiUrl,
+        api_path: apiPath,
+      };
+      apiBody.api_key = apiKey === MASKED_API_KEY_VALUE ? null : apiKey;
       const lockBody = { enabled: lockEnabled };
       if (newAccessKey) lockBody.key = newAccessKey;
       const tsBody = { enabled: tsEnabled };
@@ -2199,11 +2414,12 @@
       const rlBody = { enabled: rlEnabled, limit: rlLimit, window_seconds: rlWindow };
 
       try {
-        await apiFetch('/api/settings', {
+        const apiResp = await apiFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(apiBody),
         }, 'saving settings');
+        syncApiSettingsState(apiResp);
 
         const lockResp = await apiFetch('/api/admin/access-lock', {
           method: 'POST',
@@ -2491,9 +2707,11 @@
     function renderSizeButton() {
       const value = getSizeValue(sizeState);
       const button = document.getElementById('sizeSelect');
+      const meta = getSizeMeta(sizeState);
       button.value = value;
+      button.title = meta;
       document.getElementById('sizeSelectLabel').textContent = formatSizeValue(value);
-      document.getElementById('sizeSelectMeta').textContent = getSizeMeta(sizeState);
+      document.getElementById('sizeSelectMeta').textContent = meta;
     }
 
     function openSizeDialog() {
@@ -2564,7 +2782,7 @@
       const previewLoading = document.getElementById('previewLoading');
       const previewImg = document.getElementById('previewImage');
       const previewLoadingText = document.getElementById('previewLoadingText');
-      const inputs = ['promptInput', 'modelSelect', 'qualitySelect', 'formatSelect', 'compressionInput', 'quantityInput'];
+      const inputs = ['promptInput', 'modelSelect', 'qualitySelect', 'formatSelect', 'compressionInput', 'quantityInput', 'responseFormatSelect'];
       const spinnerHTML = `<span class="spinner"></span> <span>${escapeHtml(t('generate.generating'))}</span>`;
       const idleHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> <span>${escapeHtml(t('generate.action'))}</span>`;
 
@@ -3049,6 +3267,7 @@
         n: quantity,
         quality: document.getElementById('qualitySelect').value,
         output_format: outputFormat,
+        response_format: document.getElementById('responseFormatSelect').value,
       };
 
       if (outputFormat !== 'png') {
@@ -3237,6 +3456,15 @@
                       </svg>
                     </a>
                     ${deleteBtn}
+                    <button onclick="copyImageUrl(event, this)"
+                      data-image-url="${escapeAttribute(previewSrc)}"
+                      class="p-1.5 rounded-lg text-zinc-500 hover:text-sky-400 hover:bg-sky-900/20 transition-colors"
+                      title="${escapeAttribute(t('gallery.copyUrlTitle'))}">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 015.656 0l1.414 1.414a4 4 0 010 5.656l-3.535 3.536a4 4 0 01-5.657 0l-1.414-1.414"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.172 13.828a4 4 0 01-5.656 0l-1.414-1.414a4 4 0 010-5.657l3.535-3.535a4 4 0 015.657 0l1.414 1.414"/>
+                      </svg>
+                    </button>
                     <button onclick="copyPrompt(event, this)"
                       data-prompt="${escapedPromptAttr}"
                       class="p-1.5 rounded-lg text-zinc-500 hover:text-emerald-400 hover:bg-emerald-900/20 transition-colors"
@@ -3307,6 +3535,9 @@
         if (meta.n) {
           document.getElementById('quantityInput').value = String(meta.n);
           clampQuantityInput();
+        }
+        if (meta.response_format && ['b64_json','url','none'].includes(meta.response_format)) {
+          document.getElementById('responseFormatSelect').value = meta.response_format;
         }
         document.getElementById('promptInput').scrollIntoView({ behavior: 'smooth', block: 'start' });
         if (!document.getElementById('lightbox').classList.contains('hidden')) closeLightbox();
@@ -3382,6 +3613,133 @@
       }
     }
 
+    function resolveImageUrl(rawUrl) {
+      if (!rawUrl) return '';
+      if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+      try {
+        return new URL(rawUrl, window.location.origin).toString();
+      } catch {
+        return rawUrl;
+      }
+    }
+
+    async function copyImageUrl(event, button) {
+      event.stopPropagation();
+      const target = button.dataset.imageUrl || '';
+      try {
+        await copyText(resolveImageUrl(target));
+        showToast(t('gallery.copyUrlSuccess'), 'success');
+      } catch (e) {
+        showToast(t('common.copyFail'), 'error');
+      }
+    }
+
+    let jsZipPromise = null;
+    function loadJsZip() {
+      if (jsZipPromise) return jsZipPromise;
+      jsZipPromise = new Promise((resolve, reject) => {
+        if (window.JSZip) { resolve(window.JSZip); return; }
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+        s.async = true;
+        s.onload = () => {
+          if (window.JSZip) resolve(window.JSZip);
+          else reject(new Error('JSZip failed to load'));
+        };
+        s.onerror = () => reject(new Error('JSZip failed to load'));
+        document.head.appendChild(s);
+      });
+      return jsZipPromise;
+    }
+
+    function dedupeZipName(used, filename) {
+      const dot = filename.lastIndexOf('.');
+      const base = dot > 0 ? filename.slice(0, dot) : filename;
+      const ext = dot > 0 ? filename.slice(dot) : '';
+      let name = filename;
+      let i = 1;
+      while (used.has(name)) {
+        name = `${base}_${i}${ext}`;
+        i += 1;
+      }
+      used.add(name);
+      return name;
+    }
+
+    async function fetchAllGalleryEntries() {
+      const allEntries = [];
+      let page = 1;
+      const pageSize = 100;
+      const scope = isAdmin && galleryScope === 'all' ? '&scope=all' : '';
+      while (true) {
+        const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
+        const items = Array.isArray(data.images) ? data.images : [];
+        allEntries.push(...items);
+        if (!data.has_next || items.length === 0) break;
+        page += 1;
+        if (page > 200) break;
+      }
+      return allEntries;
+    }
+
+    async function downloadGalleryAsZip() {
+      const btn = document.getElementById('downloadAllBtn');
+      const labelEl = btn.querySelector('span');
+      const originalLabel = labelEl ? labelEl.textContent : '';
+      btn.disabled = true;
+      if (labelEl) labelEl.textContent = t('gallery.downloadAllPacking');
+      try {
+        const [JSZip, entries] = await Promise.all([loadJsZip(), fetchAllGalleryEntries()]);
+        if (!entries.length) {
+          showToast(t('gallery.downloadAllEmpty'), 'error');
+          return;
+        }
+        const zip = new JSZip();
+        const used = new Set();
+        for (const entry of entries) {
+          const filename = entry.filename || '';
+          if (!filename) continue;
+          const direct = entry.is_public !== false
+            && typeof entry.image_url === 'string'
+            && /^https?:\/\//i.test(entry.image_url)
+            ? entry.image_url
+            : null;
+          const url = direct || `/api/download/${encodeURIComponent(filename)}`;
+          const init = direct ? {} : { credentials: 'same-origin' };
+          const resp = await fetch(url, init);
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          zip.file(dedupeZipName(used, filename), blob);
+        }
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `gpt-images-${ts}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+        showToast(t('gallery.downloadAllDone', { n: used.size }), 'success');
+      } catch (e) {
+        showToast(t('gallery.downloadAllFail') + ': ' + (e?.message || e), 'error');
+      } finally {
+        btn.disabled = false;
+        if (labelEl) labelEl.textContent = originalLabel || t('gallery.downloadAll');
+      }
+    }
+
+    async function copyLightboxImageUrl(event) {
+      event.stopPropagation();
+      if (!activeLightboxImage) return;
+      try {
+        await copyText(resolveImageUrl(activeLightboxImage.image_url || ''));
+        showToast(t('gallery.copyUrlSuccess'), 'success');
+      } catch (e) {
+        showToast(t('common.copyFail'), 'error');
+      }
+    }
+
     function editFromLightbox() {
       if (!activeLightboxImage) return;
       editImageFromGallery(activeLightboxImage.id);
@@ -3420,6 +3778,7 @@
         quality: img.quality || 'Unknown',
         output_format: img.output_format || guessFormatFromFilename(img.filename || img.image_url),
         output_compression: img.output_compression,
+        response_format: img.response_format || 'Unknown',
         n: img.n,
         api_path: img.api_path || 'Unknown',
         is_public: img.is_public !== false,
@@ -3704,6 +4063,7 @@
         renderParameter(t('param.outputFormat'), image.output_format),
         renderParameter(t('param.outputCompression'), image.output_compression),
         renderParameter(t('param.quantity'), image.n),
+        renderParameter(t('param.responseFormat'), image.response_format),
         renderParameter(t('param.apiPath'), image.api_path),
         renderParameter(t('param.public'), publicValue),
       ].join('');

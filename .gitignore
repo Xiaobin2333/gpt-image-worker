@@ -1,4 +1,6 @@
 CLAUDE.md
+AGENTS.md
+AGENTS.local.md
 .DS_Store
 
 node_modules/
@@ -10,3 +12,8 @@ dist/
 
 release/
 *.zip
+
+# Local deploy config with real Cloudflare resource IDs.
+# Use `wrangler deploy -c wrangler.dev.toml` to push to your account.
+wrangler.dev.toml
+wrangler.*.local.toml

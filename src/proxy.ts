@@ -24,27 +24,34 @@ function decodeBase64(b64: string): ArrayBuffer {
   return out.buffer;
 }
 
-function extractBase64Image(value: unknown): string | null {
-  if (typeof value === "string" && value) return value;
+interface UpstreamImageRecord {
+  b64_json?: string;
+  url?: string;
+}
+
+function extractResponseImageResult(value: unknown): UpstreamImageRecord | null {
+  if (typeof value === "string" && value) {
+    if (value.startsWith("http://") || value.startsWith("https://")) return { url: value };
+    if (value.startsWith("data:")) {
+      const parsed = /^data:[^;,]*(?:;[^,]*)?;base64,(.+)$/i.exec(value);
+      if (parsed) return { b64_json: parsed[1]! };
+    }
+    return { b64_json: value };
+  }
   if (Array.isArray(value)) {
     for (const item of value) {
-      const got = extractBase64Image(item);
+      const got = extractResponseImageResult(item);
       if (got) return got;
     }
     return null;
   }
   if (value && typeof value === "object") {
-    for (const key of ["b64_json", "base64", "data", "result"]) {
-      const got = extractBase64Image((value as Record<string, unknown>)[key]);
+    for (const key of ["url", "b64_json", "base64", "data", "result"]) {
+      const got = extractResponseImageResult((value as Record<string, unknown>)[key]);
       if (got) return got;
     }
   }
   return null;
-}
-
-interface UpstreamImageRecord {
-  b64_json?: string;
-  url?: string;
 }
 
 function extractResponseImageResults(result: Record<string, unknown>): UpstreamImageRecord[] {
@@ -53,8 +60,8 @@ function extractResponseImageResults(result: Record<string, unknown>): UpstreamI
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
     if ((item as Record<string, unknown>).type !== "image_generation_call") continue;
-    const b64 = extractBase64Image((item as Record<string, unknown>).result);
-    if (b64) out.push({ b64_json: b64 });
+    const rec = extractResponseImageResult((item as Record<string, unknown>).result);
+    if (rec) out.push(rec);
   }
   return out;
 }
@@ -74,6 +81,11 @@ async function fetchImageBytes(
 ): Promise<ArrayBuffer> {
   if (image.b64_json) return decodeBase64(image.b64_json);
   if (image.url) {
+    if (image.url.startsWith("data:")) {
+      const parsed = /^data:[^;,]*(?:;[^,]*)?;base64,(.+)$/i.exec(image.url);
+      if (!parsed) throw new Error("Upstream returned malformed data URL");
+      return decodeBase64(parsed[1]!);
+    }
     const target = resolveImageUrl(image.url, apiUrl);
     const sameOrigin = (() => {
       try { return new URL(target).host === new URL(apiUrl).host; } catch { return false; }
@@ -122,6 +134,9 @@ function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<stri
     quality: payload.quality,
     output_format: payload.output_format,
   };
+  if (payload.response_format && payload.response_format !== "none") {
+    data.response_format = payload.response_format;
+  }
   if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
     data.output_compression = payload.output_compression;
   }
@@ -136,6 +151,9 @@ function buildResponsesPayload(env: Bindings, payload: GenerateRequestBody, resp
     quality: payload.quality,
     output_format: payload.output_format,
   };
+  if (payload.response_format && payload.response_format !== "none") {
+    tool.response_format = payload.response_format;
+  }
   if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
     tool.output_compression = payload.output_compression;
   }
@@ -161,7 +179,7 @@ function buildResponsesPayload(env: Bindings, payload: GenerateRequestBody, resp
   };
 }
 
-const UPSTREAM_TIMEOUT_MS = 8 * 60 * 1000;
+const UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
 
 async function postJson(url: string, apiKey: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
   try {
@@ -197,6 +215,10 @@ async function callImagesEdits(
   form.append("size", payload.size);
   form.append("n", String(payload.n));
   form.append("quality", payload.quality);
+  form.append("output_format", payload.output_format);
+  if (payload.response_format && payload.response_format !== "none") {
+    form.append("response_format", payload.response_format);
+  }
   if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
     form.append("output_compression", String(payload.output_compression));
   }
@@ -290,6 +312,7 @@ export async function callImageGeneration(
     size: payload.size,
     quality: payload.quality,
     output_format: payload.output_format,
+    response_format: payload.response_format,
   });
 
   const persistEntry = async (rec: UpstreamImageRecord, sourceText: string): Promise<GalleryEntry> => {
@@ -313,6 +336,7 @@ export async function callImageGeneration(
       quality: payload.quality,
       output_format: payload.output_format,
       output_compression: payload.output_compression ?? null,
+      response_format: payload.response_format,
       n: payload.n,
       api_path: apiPath,
       is_public: payload.is_public ?? true,

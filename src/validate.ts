@@ -38,6 +38,7 @@ export function validateImageSize(size: string): string {
 
 const QUALITIES = new Set(["auto", "low", "medium", "high"]);
 const FORMATS = new Set(["png", "jpeg", "webp"]);
+const RESPONSE_FORMATS = new Set(["b64_json", "url", "none"]);
 
 export function parseGenerateBody(input: unknown, limits: ParseLimits): GenerateRequestBody {
   if (!input || typeof input !== "object") {
@@ -77,6 +78,10 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
     }
   }
 
+  const response_format = typeof raw.response_format === "string" && RESPONSE_FORMATS.has(raw.response_format)
+    ? (raw.response_format as GenerateRequestBody["response_format"])
+    : "b64_json";
+
   let reference_images: string[] | undefined;
   if (Array.isArray(raw.reference_images)) {
     if (limits.referenceMaxCount === 0) {
@@ -111,6 +116,7 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
     quality: quality as GenerateRequestBody["quality"],
     output_format: output_format as GenerateRequestBody["output_format"],
     output_compression,
+    response_format,
     reference_images,
     is_public,
   };

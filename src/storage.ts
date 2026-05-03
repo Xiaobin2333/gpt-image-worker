@@ -221,6 +221,7 @@ function rowToEntry(row: Record<string, unknown> | null): GalleryEntry | null {
     output_compression: row.output_compression !== null && row.output_compression !== undefined
       ? Number(row.output_compression)
       : null,
+    response_format: row.response_format ? String(row.response_format) : undefined,
     n: row.n !== null && row.n !== undefined ? Number(row.n) : undefined,
     api_path: row.api_path ? String(row.api_path) : undefined,
     is_public: Number(row.is_public) === 1,
@@ -234,8 +235,8 @@ export async function addToGallery(
   entry: GalleryEntry,
 ): Promise<GalleryEntry> {
   await env.DB.prepare(
-    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, n, api_path, is_public, has_reference, owner_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, is_public, has_reference, owner_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   )
     .bind(
       entry.id,
@@ -247,6 +248,7 @@ export async function addToGallery(
       entry.quality ?? null,
       entry.output_format ?? null,
       entry.output_compression ?? null,
+      entry.response_format ?? null,
       entry.n ?? null,
       entry.api_path ?? null,
       entry.is_public ? 1 : 0,

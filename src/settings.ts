@@ -6,6 +6,19 @@ const TURNSTILE_KEY = "runtime:turnstile";
 const RATE_LIMIT_KEY = "runtime:ratelimit";
 const LIMITS_KEY = "runtime:limits";
 
+export interface ApiPreset {
+  id: string;
+  name: string;
+  api_url: string;
+  api_key: string;
+  api_path: ApiPath;
+}
+
+export interface ApiSettingsState {
+  active_preset_id: string;
+  presets: ApiPreset[];
+}
+
 export interface AccessLock {
   enabled: boolean;
   key: string;
@@ -53,30 +66,154 @@ export function normalizeApiPath(path: string | undefined | null): ApiPath {
 
 const KV_CACHE_TTL_SECONDS = 300;
 
-export async function loadSettings(env: Bindings): Promise<RuntimeSettings> {
-  const stored = await env.SETTINGS.get<Partial<RuntimeSettings>>(SETTINGS_KEY, {
+function sanitizePreset(raw: unknown, fallbackId: string, fallbackName: string): ApiPreset {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const id = typeof r.id === "string" && r.id.trim() ? r.id.trim() : fallbackId;
+  const rawName = typeof r.name === "string" ? r.name.trim() : "";
+  const name = rawName || fallbackName;
+  const apiUrl = typeof r.api_url === "string" ? r.api_url.replace(/\/+$/, "") : "";
+  const apiKey = typeof r.api_key === "string" ? r.api_key : "";
+  const apiPath = normalizeApiPath(typeof r.api_path === "string" ? r.api_path : undefined);
+  return { id, name, api_url: apiUrl, api_key: apiKey, api_path: apiPath };
+}
+
+function defaultPresetFromEnv(env: Bindings): ApiPreset {
+  return {
+    id: "default",
+    name: "Default",
+    api_url: (env.DEFAULT_API_URL ?? "").replace(/\/+$/, ""),
+    api_key: env.DEFAULT_API_KEY ?? "",
+    api_path: normalizeApiPath(env.DEFAULT_API_PATH),
+  };
+}
+
+export async function loadApiSettingsState(env: Bindings): Promise<ApiSettingsState> {
+  const stored = await env.SETTINGS.get<Record<string, unknown>>(SETTINGS_KEY, {
     type: "json",
     cacheTtl: KV_CACHE_TTL_SECONDS,
   });
+  if (stored && Array.isArray(stored.presets)) {
+    const seen = new Set<string>();
+    const presets: ApiPreset[] = [];
+    (stored.presets as unknown[]).forEach((p, i) => {
+      const cand = sanitizePreset(p, `preset-${i + 1}`, `Preset ${i + 1}`);
+      if (seen.has(cand.id)) return;
+      seen.add(cand.id);
+      presets.push(cand);
+    });
+    if (presets.length === 0) presets.push(defaultPresetFromEnv(env));
+    const requested = typeof stored.active_preset_id === "string" ? stored.active_preset_id : "";
+    const active_preset_id = presets.some((p) => p.id === requested) ? requested : presets[0]!.id;
+    return { active_preset_id, presets };
+  }
+  const legacy = (stored ?? {}) as Partial<RuntimeSettings>;
+  const seed = defaultPresetFromEnv(env);
+  const preset: ApiPreset = {
+    id: "default",
+    name: "Default",
+    api_url: typeof legacy.api_url === "string" ? legacy.api_url.replace(/\/+$/, "") : seed.api_url,
+    api_key: typeof legacy.api_key === "string" ? legacy.api_key : seed.api_key,
+    api_path: normalizeApiPath(typeof legacy.api_path === "string" ? legacy.api_path : seed.api_path),
+  };
+  return { active_preset_id: preset.id, presets: [preset] };
+}
+
+export async function saveApiSettingsState(
+  env: Bindings,
+  state: ApiSettingsState,
+): Promise<ApiSettingsState> {
+  await env.SETTINGS.put(SETTINGS_KEY, JSON.stringify(state));
+  return state;
+}
+
+function getActivePreset(state: ApiSettingsState): ApiPreset {
+  return state.presets.find((p) => p.id === state.active_preset_id) ?? state.presets[0]!;
+}
+
+export async function loadSettings(env: Bindings): Promise<RuntimeSettings> {
+  const state = await loadApiSettingsState(env);
+  const active = getActivePreset(state);
   return {
-    api_url: (stored?.api_url ?? env.DEFAULT_API_URL ?? "").replace(/\/+$/, ""),
-    api_key: stored?.api_key ?? env.DEFAULT_API_KEY ?? "",
-    api_path: normalizeApiPath(stored?.api_path ?? env.DEFAULT_API_PATH),
+    api_url: active.api_url,
+    api_key: active.api_key,
+    api_path: active.api_path,
   };
 }
 
 export async function saveSettings(
   env: Bindings,
-  patch: { api_url: string; api_key?: string | null; api_path: string },
+  patch: { active_preset_id?: string | null; preset_name?: string | null; api_url: string; api_key?: string | null; api_path: string },
 ): Promise<RuntimeSettings> {
-  const current = await loadSettings(env);
-  const next: RuntimeSettings = {
+  const state = await loadApiSettingsState(env);
+  const targetId = patch.active_preset_id && state.presets.some((p) => p.id === patch.active_preset_id)
+    ? patch.active_preset_id
+    : state.active_preset_id;
+  const target = state.presets.find((p) => p.id === targetId) ?? state.presets[0]!;
+  const renamed = typeof patch.preset_name === "string" && patch.preset_name.trim()
+    ? patch.preset_name.trim()
+    : target.name;
+  const next: ApiPreset = {
+    id: target.id,
+    name: renamed,
     api_url: patch.api_url.replace(/\/+$/, ""),
-    api_key: patch.api_key === undefined || patch.api_key === null ? current.api_key : patch.api_key,
+    api_key: patch.api_key === undefined || patch.api_key === null ? target.api_key : patch.api_key,
     api_path: normalizeApiPath(patch.api_path),
   };
-  await env.SETTINGS.put(SETTINGS_KEY, JSON.stringify(next));
+  const presets = state.presets.map((p) => (p.id === target.id ? next : p));
+  await saveApiSettingsState(env, { active_preset_id: target.id, presets });
+  return { api_url: next.api_url, api_key: next.api_key, api_path: next.api_path };
+}
+
+export async function createApiPreset(
+  env: Bindings,
+  patch: { name?: string | null; api_url?: string | null; api_key?: string | null; api_path?: string | null; source_preset_id?: string | null },
+): Promise<{ state: ApiSettingsState; created: ApiPreset }> {
+  const state = await loadApiSettingsState(env);
+  const source = patch.source_preset_id
+    ? state.presets.find((p) => p.id === patch.source_preset_id) ?? getActivePreset(state)
+    : getActivePreset(state);
+  const id = crypto.randomUUID();
+  const nextNumber = state.presets.length + 1;
+  const candidateName = (patch.name ?? "").trim();
+  const created: ApiPreset = {
+    id,
+    name: candidateName || `Preset ${nextNumber}`,
+    api_url: (patch.api_url ?? source.api_url).replace(/\/+$/, ""),
+    api_key: patch.api_key ?? source.api_key,
+    api_path: normalizeApiPath(patch.api_path ?? source.api_path),
+  };
+  const presets = [...state.presets, created];
+  const nextState: ApiSettingsState = { active_preset_id: id, presets };
+  await saveApiSettingsState(env, nextState);
+  return { state: nextState, created };
+}
+
+export async function activateApiPreset(env: Bindings, presetId: string): Promise<ApiSettingsState | null> {
+  const state = await loadApiSettingsState(env);
+  if (!state.presets.some((p) => p.id === presetId)) return null;
+  const next: ApiSettingsState = { ...state, active_preset_id: presetId };
+  await saveApiSettingsState(env, next);
   return next;
+}
+
+export async function deleteApiPreset(env: Bindings, presetId: string): Promise<{ state: ApiSettingsState | null; error?: string }> {
+  const state = await loadApiSettingsState(env);
+  if (state.presets.length <= 1) return { state: null, error: "At least one preset is required" };
+  const idx = state.presets.findIndex((p) => p.id === presetId);
+  if (idx < 0) return { state: null, error: "Preset not found" };
+  const presets = state.presets.filter((p) => p.id !== presetId);
+  let active_preset_id = state.active_preset_id;
+  if (state.active_preset_id === presetId) {
+    const fallback = presets[Math.min(idx, presets.length - 1)]!;
+    active_preset_id = fallback.id;
+  }
+  const next: ApiSettingsState = { active_preset_id, presets };
+  await saveApiSettingsState(env, next);
+  return { state: next };
+}
+
+export function getActivePresetFromState(state: ApiSettingsState): ApiPreset {
+  return getActivePreset(state);
 }
 
 export async function loadAccessLock(env: Bindings): Promise<AccessLock> {
