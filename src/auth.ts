@@ -106,7 +106,7 @@ export async function verifyAccessToken(
   return expiresAt;
 }
 
-export function getClientIp(c: Context<{ Bindings: Bindings }>): string {
+export function getClientIp(c: Context<any>): string {
   const trustProxy = c.env.TRUST_PROXY_HEADERS.toLowerCase() === "true"
     || c.env.TRUST_PROXY_HEADERS === "1";
 
@@ -188,14 +188,19 @@ export function isIpAllowed(env: Bindings, ip: string): boolean {
   return false;
 }
 
-export async function isAdminRequest(c: Context<{ Bindings: Bindings }>): Promise<boolean> {
+export async function isAdminRequest(c: Context<any>): Promise<boolean> {
   if (!c.env.ADMIN_KEY) return false;
   const cookie = getCookie(c, c.env.ADMIN_KEY_COOKIE_NAME);
   return (await verifyAccessToken(c.env, cookie, "admin")) !== null;
 }
 
-export async function isUnlocked(c: Context<{ Bindings: Bindings }>): Promise<boolean> {
-  const lock = await loadAccessLock(c.env);
+export async function isUnlocked(c: Context<any>): Promise<boolean> {
+  let lockPromise = c.get("cache_access") as Promise<Awaited<ReturnType<typeof loadAccessLock>>> | undefined;
+  if (!lockPromise) {
+    lockPromise = loadAccessLock(c.env);
+    c.set("cache_access", lockPromise);
+  }
+  const lock = await lockPromise;
   if (!lock.enabled || !lock.key) return true;
   const cookie = getCookie(c, c.env.ACCESS_KEY_COOKIE_NAME);
   if ((await verifyAccessToken(c.env, cookie, "access")) !== null) return true;
@@ -204,7 +209,7 @@ export async function isUnlocked(c: Context<{ Bindings: Bindings }>): Promise<bo
 
 const OWNER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function getOwnerId(c: Context<{ Bindings: Bindings }>): string | undefined {
+export function getOwnerId(c: Context<any>): string | undefined {
   const cookie = getCookie(c, c.env.OWNER_COOKIE_NAME);
   if (cookie && OWNER_ID_RE.test(cookie)) return cookie;
   const header = c.req.header("x-owner-id");

@@ -12,6 +12,7 @@ import {
 } from "./auth";
 import { callImageGeneration } from "./proxy";
 import {
+  deleteAllGallery,
   deleteGalleryEntry,
   getEntry,
   getEntryByFilename,
@@ -25,16 +26,51 @@ import {
   pruneOrphanImages,
   saveJob,
   tryClaimJob,
+  updateGalleryEntry,
 } from "./storage";
 import { LIMITS_BOUNDS, activateApiPreset, createApiPreset, deleteApiPreset, getActivePresetFromState, loadAccessLock, loadApiSettingsState, loadRateLimitConfig, loadRuntimeLimits, loadSettings, loadTurnstileConfig, maskKey, normalizeApiPath, saveAccessLock, saveRateLimitConfig, saveRuntimeLimits, saveSettings, saveTurnstileConfig, type ApiPreset, type ApiSettingsState } from "./settings";
 import { verifyTurnstileToken } from "./turnstile";
 import { checkRateLimit, pruneRateLimits } from "./ratelimit";
-import type { Bindings, GalleryEntry, GenerateJob, GenerateResponse } from "./types";
+import type { ApiPath, Bindings, GalleryEntry, GenerateJob, GenerateJobInput, GenerateJobSnapshot, GenerateResponse } from "./types";
 import { parseGenerateBody, ValidationError } from "./validate";
 import { getCookie } from "hono/cookie";
 
-const app = new Hono<{ Bindings: Bindings }>();
-type AppContext = Context<{ Bindings: Bindings }>;
+type RequestVars = {
+  cache_access?: Promise<Awaited<ReturnType<typeof loadAccessLock>>>;
+  cache_turnstile?: Promise<Awaited<ReturnType<typeof loadTurnstileConfig>>>;
+  cache_ratelimit?: Promise<Awaited<ReturnType<typeof loadRateLimitConfig>>>;
+  cache_limits?: Promise<Awaited<ReturnType<typeof loadRuntimeLimits>>>;
+  cache_api_state?: Promise<Awaited<ReturnType<typeof loadApiSettingsState>>>;
+};
+
+const app = new Hono<{ Bindings: Bindings; Variables: RequestVars }>();
+type AppContext = Context<{ Bindings: Bindings; Variables: RequestVars }>;
+
+function cachedAccessLock(c: AppContext) {
+  let p = c.get("cache_access");
+  if (!p) { p = loadAccessLock(c.env); c.set("cache_access", p); }
+  return p;
+}
+function cachedTurnstile(c: AppContext) {
+  let p = c.get("cache_turnstile");
+  if (!p) { p = loadTurnstileConfig(c.env); c.set("cache_turnstile", p); }
+  return p;
+}
+function cachedRateLimit(c: AppContext) {
+  let p = c.get("cache_ratelimit");
+  if (!p) { p = loadRateLimitConfig(c.env); c.set("cache_ratelimit", p); }
+  return p;
+}
+function cachedLimits(c: AppContext) {
+  let p = c.get("cache_limits");
+  if (!p) { p = loadRuntimeLimits(c.env); c.set("cache_limits", p); }
+  return p;
+}
+function cachedApiState(c: AppContext) {
+  let p = c.get("cache_api_state");
+  if (!p) { p = loadApiSettingsState(c.env); c.set("cache_api_state", p); }
+  return p;
+}
 
 function jsonError(status: number, detail: string): Response {
   return new Response(JSON.stringify({ status: "error", detail }), {
@@ -104,6 +140,10 @@ function buildGenerateResponse(domain: string, entries: GalleryEntry[]): Generat
     response_format: primary.response_format,
     n: primary.n,
     api_path: primary.api_path,
+    api_preset_name: primary.api_preset_name,
+    image_width: primary.image_width ?? null,
+    image_height: primary.image_height ?? null,
+    duration: primary.duration,
     is_public: primary.is_public,
   };
 }
@@ -144,7 +184,11 @@ function constantTimeEq(a: string, b: string): boolean {
 }
 
 app.get("/api/session", async (c) => {
-  const lock = await loadAccessLock(c.env);
+  const [lock, turnstile, limits] = await Promise.all([
+    cachedAccessLock(c),
+    cachedTurnstile(c),
+    cachedLimits(c),
+  ]);
   const accessRequired = !!lock.enabled && !!lock.key;
   let accessAuthed = !accessRequired;
   let accessExpires: Date | null = null;
@@ -162,11 +206,7 @@ app.get("/api/session", async (c) => {
     isAdmin = adminExpires !== null;
   }
   if (isAdmin) accessAuthed = true;
-  const [turnstile, limits] = await Promise.all([
-    loadTurnstileConfig(c.env),
-    loadRuntimeLimits(c.env),
-  ]);
-  c.header("Cache-Control", "private, max-age=10");
+  c.header("Cache-Control", "no-store");
   return c.json({
     access_required: accessRequired,
     authenticated: accessAuthed,
@@ -187,7 +227,7 @@ app.get("/api/session", async (c) => {
 });
 
 app.post("/api/access", async (c) => {
-  const lock = await loadAccessLock(c.env);
+  const lock = await cachedAccessLock(c);
   if (!lock.enabled || !lock.key) {
     return c.json({ access_required: false, authenticated: true, expires_at: null });
   }
@@ -202,7 +242,7 @@ app.post("/api/access", async (c) => {
     return jsonError(401, "Invalid access key");
   }
 
-  const limits = await loadRuntimeLimits(c.env);
+  const limits = await cachedLimits(c);
   const minutes = limits.access_session_minutes;
   const { token, expiresAt } = await createAccessToken(c.env, "access", minutes);
   const url = new URL(c.req.url);
@@ -386,7 +426,7 @@ app.post("/api/admin/login", async (c) => {
     return jsonError(401, "Invalid admin key");
   }
 
-  const limits = await loadRuntimeLimits(c.env);
+  const limits = await cachedLimits(c);
   const minutes = limits.admin_session_minutes;
   const { token, expiresAt } = await createAccessToken(c.env, "admin", minutes);
   const url = new URL(c.req.url);
@@ -523,14 +563,39 @@ app.delete("/api/settings/presets/:id", async (c) => {
   return c.json(buildSettingsResponse(state));
 });
 
+type JobRunContext = {
+  api_url: string;
+  api_key: string;
+  api_path: string;
+  api_preset_name: string;
+  max_file_size_mb: number;
+  r2_public_domain: string;
+};
+
+async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
+  if (input?.snapshot) return { ...input.snapshot };
+  const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
+  const active = getActivePresetFromState(apiState);
+  return {
+    api_url: active.api_url,
+    api_key: active.api_key,
+    api_path: active.api_path,
+    api_preset_name: active.name || "",
+    max_file_size_mb: limits.max_file_size_mb,
+    r2_public_domain: limits.r2_public_domain,
+  };
+}
+
 app.post("/api/generate", async (c) => {
-  const [bodyTextOrErr, settings, rlConfig, turnstile, limits] = await Promise.all([
+  const [bodyTextOrErr, apiState, rlConfig, turnstile, limits] = await Promise.all([
     c.req.text().catch((e) => e instanceof Error ? e : new Error(String(e))),
-    loadSettings(c.env),
-    loadRateLimitConfig(c.env),
-    loadTurnstileConfig(c.env),
-    loadRuntimeLimits(c.env),
+    cachedApiState(c),
+    cachedRateLimit(c),
+    cachedTurnstile(c),
+    cachedLimits(c),
   ]);
+  const activePreset = getActivePresetFromState(apiState);
+  const settings = { api_url: activePreset.api_url, api_key: activePreset.api_key, api_path: activePreset.api_path };
   if (bodyTextOrErr instanceof Error) return jsonError(400, "Request body must be readable");
   if (!settings.api_url) return jsonError(400, "API URL not configured. Please set it in Settings.");
   if (!settings.api_key) return jsonError(400, "API Key not configured. Please set it in Settings.");
@@ -586,7 +651,15 @@ app.post("/api/generate", async (c) => {
     prompt: payload.prompt,
     owner_id: owner,
   };
-  await saveJob(c.env, initial, { payload, owner_id: owner });
+  const snapshot: GenerateJobSnapshot = {
+    api_url: settings.api_url,
+    api_key: settings.api_key,
+    api_path: settings.api_path,
+    api_preset_name: activePreset.name || "",
+    max_file_size_mb: limits.max_file_size_mb,
+    r2_public_domain: limits.r2_public_domain,
+  };
+  await saveJob(c.env, initial, { payload, owner_id: owner, snapshot });
 
   return c.json({ job_id: jobId, status: "queued" }, 202);
 });
@@ -645,13 +718,13 @@ app.get("/api/generate/:jobId/stream", async (c) => {
         sendEvent("running", { updated_at: claimed.updated_at });
 
         const input = await getPendingJobInput(env, jobId);
-        const limits = await loadRuntimeLimits(env);
+        const ctx = await resolveJobContext(env, input);
 
         const producedIds = claimed.produced_ids ?? [];
         const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
         const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
         if (existingEntries.length >= targetN && targetN > 0) {
-          const result = buildGenerateResponse(limits.r2_public_domain, existingEntries.slice(0, targetN));
+          const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
           await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
           sendEvent("done", { result });
           return;
@@ -659,7 +732,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         if (!input) {
           if (existingEntries.length > 0) {
-            const result = buildGenerateResponse(limits.r2_public_domain, existingEntries);
+            const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
             await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
             sendEvent("done", { result });
             return;
@@ -669,8 +742,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           return;
         }
 
-        const settings = await loadSettings(env);
-        if (!settings.api_url || !settings.api_key) {
+        if (!ctx.api_url || !ctx.api_key) {
           const detail = "API not configured";
           await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
           sendEvent("error", { detail });
@@ -679,22 +751,31 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         const controller2 = new AbortController();
         const timer = setTimeout(() => controller2.abort(), 5 * 60 * 1000);
+        const startedAt = Date.now();
         try {
           const entries = await callImageGeneration(
             env,
-            settings,
+            { api_url: ctx.api_url, api_key: ctx.api_key, api_path: ctx.api_path as ApiPath },
             input.payload,
             input.owner_id,
             controller2.signal,
             {
               jobId,
               existingEntries,
-              maxFileSizeMb: limits.max_file_size_mb,
-              responsesModel: limits.responses_model,
+              maxFileSizeMb: ctx.max_file_size_mb,
+              apiPresetName: ctx.api_preset_name || undefined,
             },
           );
           if (entries.length === 0) throw new Error("No images returned by upstream");
-          const result = buildGenerateResponse(limits.r2_public_domain, entries);
+          const duration = `${((Date.now() - startedAt) / 1000).toFixed(2)}s`;
+          const firstNew = entries.find((e) => !existingEntries.some((x) => x.id === e.id));
+          if (firstNew) {
+            await updateGalleryEntry(env, firstNew.id, { duration }).catch((err: unknown) =>
+              console.error("updateGalleryEntry failed", { jobId, id: firstNew.id, err: err instanceof Error ? err.message : String(err) }),
+            );
+            firstNew.duration = duration;
+          }
+          const result = buildGenerateResponse(ctx.r2_public_domain, entries);
           await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
           sendEvent("done", { result });
         } catch (e) {
@@ -703,8 +784,8 @@ app.get("/api/generate/:jobId/stream", async (c) => {
             jobId,
             detail,
             error_type: e instanceof Error ? e.name : typeof e,
-            api_url: settings.api_url,
-            api_path: settings.api_path,
+            api_url: ctx.api_url,
+            api_path: ctx.api_path,
             model: input.payload.model,
             size: input.payload.size,
             quality: input.payload.quality,
@@ -766,7 +847,7 @@ app.get("/api/gallery", async (c) => {
 
   const [result, limits] = await Promise.all([
     getGalleryPage(c.env, { page, pageSize, includeAllPrivate, ownerId: owner }),
-    loadRuntimeLimits(c.env),
+    cachedLimits(c),
   ]);
   const images = result.images.map((entry) => ({
     ...entry,
@@ -775,6 +856,17 @@ app.get("/api/gallery", async (c) => {
   c.header("Cache-Control", "private, max-age=5");
   c.header("Vary", "Cookie");
   return c.json({ ...result, images });
+});
+
+app.delete("/api/gallery", async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const result = await deleteAllGallery(c.env);
+  return c.json({
+    status: "ok",
+    message: `Deleted ${result.deleted_images} image file(s) and ${result.deleted_entries} gallery entries`,
+    ...result,
+  });
 });
 
 app.delete("/api/gallery/:id", async (c) => {
@@ -875,19 +967,19 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
   }
 
   const input = await getPendingJobInput(env, jobId);
-  const limits = await loadRuntimeLimits(env);
+  const ctx = await resolveJobContext(env, input);
 
   const producedIds = claimed.produced_ids ?? [];
   const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
   const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
   if (existingEntries.length >= targetN && targetN > 0) {
-    const result = buildGenerateResponse(limits.r2_public_domain, existingEntries.slice(0, targetN));
+    const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
     await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
     return;
   }
   if (!input) {
     if (existingEntries.length > 0) {
-      const result = buildGenerateResponse(limits.r2_public_domain, existingEntries);
+      const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
       await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
       return;
     }
@@ -895,30 +987,38 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     return;
   }
 
-  const settings = await loadSettings(env);
-  if (!settings.api_url || !settings.api_key) {
+  if (!ctx.api_url || !ctx.api_key) {
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "API not configured" });
     return;
   }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  const startedAt = Date.now();
   try {
     const entries = await callImageGeneration(
       env,
-      settings,
+      { api_url: ctx.api_url, api_key: ctx.api_key, api_path: ctx.api_path as ApiPath },
       input.payload,
       input.owner_id,
       controller.signal,
       {
         jobId,
         existingEntries,
-        maxFileSizeMb: limits.max_file_size_mb,
-        responsesModel: limits.responses_model,
+        maxFileSizeMb: ctx.max_file_size_mb,
+        apiPresetName: ctx.api_preset_name || undefined,
       },
     );
     if (entries.length === 0) throw new Error("No images returned by upstream");
-    const result = buildGenerateResponse(limits.r2_public_domain, entries);
+    const duration = `${((Date.now() - startedAt) / 1000).toFixed(2)}s`;
+    const firstNew = entries.find((e) => !existingEntries.some((x) => x.id === e.id));
+    if (firstNew) {
+      await updateGalleryEntry(env, firstNew.id, { duration }).catch((err: unknown) =>
+        console.error("updateGalleryEntry failed", { jobId, id: firstNew.id, err: err instanceof Error ? err.message : String(err) }),
+      );
+      firstNew.duration = duration;
+    }
+    const result = buildGenerateResponse(ctx.r2_public_domain, entries);
     await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
@@ -926,8 +1026,8 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
       jobId,
       detail,
       error_type: e instanceof Error ? e.name : typeof e,
-      api_url: settings.api_url,
-      api_path: settings.api_path,
+      api_url: ctx.api_url,
+      api_path: ctx.api_path,
       model: input.payload.model,
       size: input.payload.size,
       quality: input.payload.quality,

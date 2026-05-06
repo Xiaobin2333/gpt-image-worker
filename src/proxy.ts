@@ -17,6 +17,75 @@ function formatInfo(fmt: string): FormatInfo {
   return FORMAT_INFO[fmt] ?? FORMAT_INFO.png!;
 }
 
+function readU32BE(view: DataView, offset: number): number {
+  return view.getUint32(offset, false);
+}
+
+function readU16BE(view: DataView, offset: number): number {
+  return view.getUint16(offset, false);
+}
+
+function readU16LE(view: DataView, offset: number): number {
+  return view.getUint16(offset, true);
+}
+
+function readU24LE(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16);
+}
+
+function getImageDimensions(buffer: ArrayBuffer): { width: number; height: number } | null {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  if (bytes.length >= 24 &&
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return { width: readU32BE(view, 16), height: readU32BE(view, 20) };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      let marker = bytes[offset + 1]!;
+      offset += 2;
+      while (marker === 0xff && offset < bytes.length) {
+        marker = bytes[offset]!;
+        offset += 1;
+      }
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (offset + 2 > bytes.length) return null;
+      const segmentLength = readU16BE(view, offset);
+      if (segmentLength < 2 || offset + segmentLength > bytes.length) return null;
+      const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+      if (sofMarkers.has(marker)) {
+        const height = readU16BE(view, offset + 3);
+        const width = readU16BE(view, offset + 5);
+        return { width, height };
+      }
+      offset += segmentLength;
+    }
+    return null;
+  }
+  if (bytes.length >= 30 &&
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    const chunk0 = bytes[12], chunk1 = bytes[13], chunk2 = bytes[14], chunk3 = bytes[15];
+    const isVP8X = chunk0 === 0x56 && chunk1 === 0x50 && chunk2 === 0x38 && chunk3 === 0x58;
+    const isVP8 = chunk0 === 0x56 && chunk1 === 0x50 && chunk2 === 0x38 && chunk3 === 0x20;
+    const isVP8L = chunk0 === 0x56 && chunk1 === 0x50 && chunk2 === 0x38 && chunk3 === 0x4c;
+    if (isVP8X) {
+      return { width: readU24LE(bytes, 24) + 1, height: readU24LE(bytes, 27) + 1 };
+    }
+    if (isVP8 && bytes.length >= 30) {
+      return { width: readU16LE(view, 26) & 0x3fff, height: readU16LE(view, 28) & 0x3fff };
+    }
+    if (isVP8L && bytes.length >= 25 && bytes[20] === 0x2f) {
+      const bits = view.getUint32(21, true);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+  }
+  return null;
+}
+
 function decodeBase64(b64: string): ArrayBuffer {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -143,40 +212,8 @@ function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<stri
   return data;
 }
 
-function buildResponsesPayload(env: Bindings, payload: GenerateRequestBody, responsesModel: string): Record<string, unknown> {
-  const tool: Record<string, unknown> = {
-    type: "image_generation",
-    model: payload.model,
-    size: payload.size,
-    quality: payload.quality,
-    output_format: payload.output_format,
-  };
-  if (payload.response_format && payload.response_format !== "none") {
-    tool.response_format = payload.response_format;
-  }
-  if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
-    tool.output_compression = payload.output_compression;
-  }
-
-  let input: unknown = payload.prompt;
-  if (payload.reference_images && payload.reference_images.length > 0) {
-    const content: Array<Record<string, unknown>> = [{ type: "input_text", text: payload.prompt }];
-    for (const ref of payload.reference_images) {
-      const parsed = parseDataUrl(ref);
-      content.push({
-        type: "input_image",
-        image_url: `data:${parsed.mediaType};base64,${parsed.base64}`,
-      });
-    }
-    input = [{ role: "user", content }];
-  }
-
-  return {
-    model: responsesModel || env.DEFAULT_RESPONSES_MODEL,
-    input,
-    tools: [tool],
-    tool_choice: { type: "image_generation" },
-  };
+function buildResponsesPayload(payload: GenerateRequestBody): Record<string, unknown> {
+  return { prompt: payload.prompt, model: payload.model };
 }
 
 const UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
@@ -277,7 +314,7 @@ export interface CallImageGenerationOptions {
   jobId?: string;
   existingEntries?: GalleryEntry[];
   maxFileSizeMb?: number;
-  responsesModel?: string;
+  apiPresetName?: string;
 }
 
 export async function callImageGeneration(
@@ -291,11 +328,7 @@ export async function callImageGeneration(
   const apiPath: ApiPath = settings.api_path;
   const hasReferences = !!payload.reference_images && payload.reference_images.length > 0;
   const fmt = formatInfo(payload.output_format);
-  const limits = options.maxFileSizeMb !== undefined && options.responsesModel !== undefined
-    ? null
-    : await loadRuntimeLimits(env);
-  const maxBytes = (options.maxFileSizeMb ?? limits!.max_file_size_mb) * 1024 * 1024;
-  const responsesModel = (options.responsesModel ?? limits!.responses_model) || env.DEFAULT_RESPONSES_MODEL;
+  const maxBytes = (options.maxFileSizeMb ?? (await loadRuntimeLimits(env)).max_file_size_mb) * 1024 * 1024;
 
   const targetCount = Math.max(1, payload.n);
   const entries: GalleryEntry[] = [...(options.existingEntries ?? [])];
@@ -326,6 +359,7 @@ export async function callImageGeneration(
     const id = generateImageId();
     const filename = `${id}.${fmt.extension}`;
     await saveImage(env, filename, bytes, fmt.mediaType);
+    const dims = getImageDimensions(bytes);
     const entry: GalleryEntry = {
       id,
       prompt: payload.prompt,
@@ -339,6 +373,9 @@ export async function callImageGeneration(
       response_format: payload.response_format,
       n: payload.n,
       api_path: apiPath,
+      api_preset_name: options.apiPresetName,
+      image_width: dims?.width ?? null,
+      image_height: dims?.height ?? null,
       is_public: payload.is_public ?? true,
       has_reference: hasReferences,
       owner_id: ownerId,
@@ -370,7 +407,7 @@ export async function callImageGeneration(
       resp = await postJson(
         `${settings.api_url}/v1/responses`,
         settings.api_key,
-        buildResponsesPayload(env, callPayload, responsesModel),
+        buildResponsesPayload(callPayload),
         signal,
       );
     }

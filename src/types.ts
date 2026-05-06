@@ -57,6 +57,10 @@ export interface GalleryEntry {
   response_format?: string;
   n?: number;
   api_path?: string;
+  api_preset_name?: string;
+  image_width?: number | null;
+  image_height?: number | null;
+  duration?: string;
   is_public: boolean;
   has_reference?: boolean;
   owner_id?: string;
@@ -84,6 +88,10 @@ export interface GenerateResponse {
   response_format?: string;
   n?: number;
   api_path?: string;
+  api_preset_name?: string;
+  image_width?: number | null;
+  image_height?: number | null;
+  duration?: string;
   is_public: boolean;
 }
 
@@ -101,7 +109,17 @@ export interface GenerateJob {
   produced_ids?: string[];
 }
 
+export interface GenerateJobSnapshot {
+  api_url: string;
+  api_key: string;
+  api_path: string;
+  api_preset_name: string;
+  max_file_size_mb: number;
+  r2_public_domain: string;
+}
+
 export interface GenerateJobInput {
   payload: GenerateRequestBody;
   owner_id?: string;
+  snapshot?: GenerateJobSnapshot;
 }

@@ -224,6 +224,10 @@ function rowToEntry(row: Record<string, unknown> | null): GalleryEntry | null {
     response_format: row.response_format ? String(row.response_format) : undefined,
     n: row.n !== null && row.n !== undefined ? Number(row.n) : undefined,
     api_path: row.api_path ? String(row.api_path) : undefined,
+    api_preset_name: row.api_preset_name ? String(row.api_preset_name) : undefined,
+    image_width: row.image_width !== null && row.image_width !== undefined ? Number(row.image_width) : null,
+    image_height: row.image_height !== null && row.image_height !== undefined ? Number(row.image_height) : null,
+    duration: row.duration ? String(row.duration) : undefined,
     is_public: Number(row.is_public) === 1,
     has_reference: Number(row.has_reference) === 1,
     owner_id: row.owner_id ? String(row.owner_id) : undefined,
@@ -235,8 +239,8 @@ export async function addToGallery(
   entry: GalleryEntry,
 ): Promise<GalleryEntry> {
   await env.DB.prepare(
-    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, is_public, has_reference, owner_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, is_public, has_reference, owner_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   )
     .bind(
       entry.id,
@@ -251,12 +255,62 @@ export async function addToGallery(
       entry.response_format ?? null,
       entry.n ?? null,
       entry.api_path ?? null,
+      entry.api_preset_name ?? null,
+      entry.image_width ?? null,
+      entry.image_height ?? null,
+      entry.duration ?? null,
       entry.is_public ? 1 : 0,
       entry.has_reference ? 1 : 0,
       entry.owner_id ?? null,
     )
     .run();
   return entry;
+}
+
+export async function updateGalleryEntry(
+  env: Bindings,
+  id: string,
+  updates: { duration?: string },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (updates.duration !== undefined) {
+    sets.push("duration = ?");
+    params.push(updates.duration);
+  }
+  if (sets.length === 0) return;
+  params.push(id);
+  await env.DB.prepare(`UPDATE gallery SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...params)
+    .run();
+}
+
+export async function deleteAllGallery(env: Bindings): Promise<{ deleted_entries: number; deleted_images: number }> {
+  const totalRow = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gallery`).first();
+  const deletedEntries = Number((totalRow as { n: number } | null)?.n ?? 0);
+
+  await env.DB.prepare(`DELETE FROM gallery`).run();
+
+  let deletedImages = 0;
+  let cursor: string | undefined = undefined;
+  while (true) {
+    const list: R2Objects = await env.IMAGES.list({ limit: 1000, cursor });
+    if (list.objects.length > 0) {
+      const keys = list.objects.map((o) => o.key);
+      for (let i = 0; i < keys.length; i += 1000) {
+        const chunk = keys.slice(i, i + 1000);
+        await env.IMAGES.delete(chunk);
+        deletedImages += chunk.length;
+      }
+    }
+    if (list.truncated && list.cursor) {
+      cursor = list.cursor;
+    } else {
+      break;
+    }
+  }
+
+  return { deleted_entries: deletedEntries, deleted_images: deletedImages };
 }
 
 export async function getEntry(env: Bindings, id: string): Promise<GalleryEntry | null> {
