@@ -21,6 +21,10 @@ import {
   getImage,
   getJob,
   getPendingJobInput,
+  offloadLargePayloadAssets,
+  inflateJobInput,
+  deleteJobTmpAssets,
+  pruneOrphanTmpAssets,
   listActiveJobs,
   listPendingJobIds,
   listProducedEntries,
@@ -694,7 +698,8 @@ app.post("/api/generate", async (c) => {
     r2_public_domain: limits.r2_public_domain,
     responses_concurrency: limits.responses_concurrency,
   };
-  await saveJob(c.env, initial, { payload, owner_id: owner, snapshot });
+  const persistedInput = await offloadLargePayloadAssets(c.env, jobId, { payload, owner_id: owner, snapshot });
+  await saveJob(c.env, initial, persistedInput);
 
   return c.json({ job_id: jobId, status: "queued" }, 202);
 });
@@ -741,6 +746,7 @@ app.delete("/api/generate/:jobId", async (c) => {
   if (result.status === "not_found") return jsonError(404, "Generation job not found");
   if (result.status === "forbidden") return jsonError(404, "Generation job not found");
   if (result.status === "already_finished") return jsonError(409, "Generation job already finished");
+  await deleteJobTmpAssets(c.env, jobId).catch(() => {});
   return c.json({ status: "success", message: "Generation job cancelled" });
 });
 
@@ -797,7 +803,8 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         sendEvent("running", { updated_at: claimed.updated_at });
 
-        const input = await getPendingJobInput(env, jobId);
+        const rawInput = await getPendingJobInput(env, jobId);
+        const input = rawInput ? await inflateJobInput(env, rawInput) : null;
         const ctx = await resolveJobContext(env, input);
 
         const producedIds = claimed.produced_ids ?? [];
@@ -878,6 +885,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           sendEvent("error", { detail });
         } finally {
           clearTimeout(timer);
+          await deleteJobTmpAssets(env, jobId).catch(() => {});
         }
       } finally {
         clearInterval(heartbeat);
@@ -1229,7 +1237,8 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     return;
   }
 
-  const input = await getPendingJobInput(env, jobId);
+  const rawInput = await getPendingJobInput(env, jobId);
+  const input = rawInput ? await inflateJobInput(env, rawInput) : null;
   const ctx = await resolveJobContext(env, input);
 
   const producedIds = claimed.produced_ids ?? [];
@@ -1238,20 +1247,24 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
   if (existingEntries.length >= targetN && targetN > 0) {
     const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
     await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
+    await deleteJobTmpAssets(env, jobId).catch(() => {});
     return;
   }
   if (!input) {
     if (existingEntries.length > 0) {
       const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
       await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
+      await deleteJobTmpAssets(env, jobId).catch(() => {});
       return;
     }
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "Pending input missing" });
+    await deleteJobTmpAssets(env, jobId).catch(() => {});
     return;
   }
 
   if (!ctx.api_url || !ctx.api_key) {
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "API not configured" });
+    await deleteJobTmpAssets(env, jobId).catch(() => {});
     return;
   }
 
@@ -1302,6 +1315,7 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
   } finally {
     clearTimeout(timer);
+    await deleteJobTmpAssets(env, jobId).catch(() => {});
   }
 }
 
@@ -1315,6 +1329,7 @@ export default {
       ctx.waitUntil(Promise.all([
         pruneOldJobs(env).catch((err) => console.error("pruneOldJobs failed", { err: err instanceof Error ? err.message : String(err) })),
         pruneRateLimits(env).catch((err) => console.error("pruneRateLimits failed", { err: err instanceof Error ? err.message : String(err) })),
+        pruneOrphanTmpAssets(env).catch((err: unknown) => console.error("pruneOrphanTmpAssets failed", { err: err instanceof Error ? err.message : String(err) })),
       ]));
     }
 

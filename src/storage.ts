@@ -1,7 +1,106 @@
-import type { Bindings, GalleryEntry, GenerateJob, GenerateJobInput } from "./types";
+import type { Bindings, GalleryEntry, GenerateJob, GenerateJobInput, GenerateRequestBody } from "./types";
 
 const STALE_RUNNING_MS = 90_000;
 const JOB_RETENTION_HOURS = 1;
+const TMP_R2_PREFIX = "tmp/";
+const R2_REF_RE = /^r2:\/\/(tmp\/[^?#\s]+)$/;
+const D1_PAYLOAD_BUDGET_BYTES = 700_000;
+
+function approxJsonSize(input: GenerateJobInput): number {
+  try {
+    return JSON.stringify(input).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function dataUrlBytes(dataUrl: string): Uint8Array {
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) throw new Error("invalid data URL");
+  const bin = atob(dataUrl.slice(comma + 1));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function dataUrlMime(dataUrl: string): string {
+  const m = /^data:([^;,]+)/.exec(dataUrl);
+  return m && m[1] ? m[1] : "application/octet-stream";
+}
+
+async function uploadTmp(env: Bindings, jobId: string, key: string, dataUrl: string): Promise<string> {
+  const bytes = dataUrlBytes(dataUrl);
+  const mime = dataUrlMime(dataUrl);
+  const objectKey = `${TMP_R2_PREFIX}${jobId}/${key}`;
+  await env.IMAGES.put(objectKey, bytes, { httpMetadata: { contentType: mime } });
+  return `r2://${objectKey}`;
+}
+
+async function fetchTmp(env: Bindings, ref: string): Promise<string> {
+  const m = R2_REF_RE.exec(ref);
+  if (!m || !m[1]) return ref;
+  const objectKey = m[1];
+  const obj = await env.IMAGES.get(objectKey);
+  if (!obj) throw new Error(`Tmp asset missing: ${ref}`);
+  const buf = await obj.arrayBuffer();
+  const mime = obj.httpMetadata?.contentType ?? "image/png";
+  let bin = "";
+  const view = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < view.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, Array.from(view.subarray(i, i + chunk)) as number[]);
+  }
+  return `data:${mime};base64,${btoa(bin)}`;
+}
+
+export async function offloadLargePayloadAssets(
+  env: Bindings,
+  jobId: string,
+  input: GenerateJobInput,
+): Promise<GenerateJobInput> {
+  if (approxJsonSize(input) <= D1_PAYLOAD_BUDGET_BYTES) return input;
+  const payload = input.payload;
+  const offloadedReferences: string[] | undefined = payload.reference_images
+    ? await Promise.all(
+        payload.reference_images.map((dataUrl, i) =>
+          dataUrl.startsWith("data:") ? uploadTmp(env, jobId, `ref-${i}`, dataUrl) : Promise.resolve(dataUrl),
+        ),
+      )
+    : payload.reference_images;
+  const offloadedMask: string | undefined = payload.mask && payload.mask.startsWith("data:")
+    ? await uploadTmp(env, jobId, "mask", payload.mask)
+    : payload.mask;
+  const next: GenerateJobInput = {
+    ...input,
+    payload: { ...payload, reference_images: offloadedReferences, mask: offloadedMask },
+  };
+  return next;
+}
+
+async function inflatePayload(env: Bindings, payload: GenerateRequestBody): Promise<GenerateRequestBody> {
+  const refs = payload.reference_images
+    ? await Promise.all(payload.reference_images.map((s) => (R2_REF_RE.test(s) ? fetchTmp(env, s) : Promise.resolve(s))))
+    : payload.reference_images;
+  const mask = payload.mask && R2_REF_RE.test(payload.mask) ? await fetchTmp(env, payload.mask) : payload.mask;
+  return { ...payload, reference_images: refs, mask };
+}
+
+export async function inflateJobInput(env: Bindings, input: GenerateJobInput): Promise<GenerateJobInput> {
+  const payload = await inflatePayload(env, input.payload);
+  return { ...input, payload };
+}
+
+export async function deleteJobTmpAssets(env: Bindings, jobId: string): Promise<void> {
+  const prefix = `${TMP_R2_PREFIX}${jobId}/`;
+  let cursor: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const list = await env.IMAGES.list({ prefix, cursor, limit: 1000 });
+    if (list.objects.length === 0) break;
+    await env.IMAGES.delete(list.objects.map((o) => o.key));
+    if (!list.truncated) break;
+    cursor = list.cursor;
+  }
+}
 
 export async function saveJob(env: Bindings, job: GenerateJob, input?: GenerateJobInput): Promise<void> {
   const payload = input ? JSON.stringify(input) : null;
@@ -128,6 +227,18 @@ export async function tryClaimJob(env: Bindings, jobId: string): Promise<Generat
 export async function pruneOldJobs(env: Bindings): Promise<void> {
   const cutoff = new Date(Date.now() - JOB_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
   await env.DB.prepare(`DELETE FROM jobs WHERE created_at < ?`).bind(cutoff).run();
+}
+
+export async function pruneOrphanTmpAssets(env: Bindings): Promise<void> {
+  const cutoffMs = Date.now() - JOB_RETENTION_HOURS * 60 * 60 * 1000;
+  let cursor: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const list = await env.IMAGES.list({ prefix: TMP_R2_PREFIX, cursor, limit: 1000 });
+    const stale = list.objects.filter((o) => o.uploaded.getTime() < cutoffMs).map((o) => o.key);
+    if (stale.length > 0) await env.IMAGES.delete(stale);
+    if (!list.truncated) break;
+    cursor = list.cursor;
+  }
 }
 
 export interface ActiveJob {
