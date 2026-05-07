@@ -17,3 +17,6 @@ release/
 # Use `wrangler deploy -c wrangler.dev.toml` to push to your account.
 wrangler.dev.toml
 wrangler.*.local.toml
+
+# Generated at every dev/deploy by scripts/gen-version.mjs (git describe).
+src/version.generated.ts

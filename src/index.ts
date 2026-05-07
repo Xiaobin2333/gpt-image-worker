@@ -36,6 +36,7 @@ import { checkRateLimit, pruneRateLimits } from "./ratelimit";
 import type { ApiPath, Bindings, GalleryEntry, GenerateJob, GenerateJobInput, GenerateJobSnapshot, GenerateResponse } from "./types";
 import { parseGenerateBody, ValidationError } from "./validate";
 import { getCookie } from "hono/cookie";
+import { APP_VERSION } from "./version.generated";
 
 type RequestVars = {
   cache_access?: Promise<Awaited<ReturnType<typeof loadAccessLock>>>;
@@ -89,8 +90,6 @@ app.use("*", async (c, next) => {
   }
   return next();
 });
-
-const APP_VERSION = "v1.1.0";
 
 function isPublicPath(path: string): boolean {
   if (path === "/health") return true;
@@ -182,7 +181,14 @@ app.get("/health", (c) =>
 app.get("/api/version", (c) => {
   const repo = (c.env.GITHUB_REPO ?? "").trim();
   const releaseUrl = repo ? `https://github.com/${repo}/releases/latest` : null;
+  const etag = `W/"${APP_VERSION}"`;
+  if (c.req.header("If-None-Match") === etag) {
+    c.header("Cache-Control", "public, max-age=300");
+    c.header("ETag", etag);
+    return c.body(null, 304);
+  }
   c.header("Cache-Control", "public, max-age=300");
+  c.header("ETag", etag);
   return c.json({ version: APP_VERSION, github_repo: repo, release_url: releaseUrl });
 });
 
@@ -276,6 +282,7 @@ app.get("/api/admin/access-lock", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const lock = await loadAccessLock(c.env);
+  c.header("Cache-Control", "private, max-age=10");
   return c.json({
     enabled: lock.enabled,
     key_set: !!lock.key,
@@ -310,6 +317,7 @@ app.get("/api/admin/turnstile", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const cfg = await loadTurnstileConfig(c.env);
+  c.header("Cache-Control", "private, max-age=10");
   return c.json({
     enabled: cfg.enabled,
     site_key: cfg.site_key,
@@ -357,6 +365,7 @@ app.get("/api/admin/rate-limit", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const cfg = await loadRateLimitConfig(c.env);
+  c.header("Cache-Control", "private, max-age=10");
   return c.json(cfg);
 });
 
@@ -387,6 +396,7 @@ app.get("/api/admin/limits", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const limits = await loadRuntimeLimits(c.env);
+  c.header("Cache-Control", "private, max-age=10");
   return c.json({ ...limits, bounds: LIMITS_BOUNDS });
 });
 
@@ -500,6 +510,7 @@ app.get("/api/settings", async (c) => {
   const denied = await requireAdmin(c);
   if (denied) return denied;
   const state = await loadApiSettingsState(c.env);
+  c.header("Cache-Control", "private, max-age=10");
   return c.json(buildSettingsResponse(state));
 });
 

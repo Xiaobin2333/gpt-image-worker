@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "prebuild-version": "node scripts/gen-version.mjs",
+    "dev": "npm run prebuild-version && wrangler dev --config wrangler.dev.toml",
+    "deploy": "npm run prebuild-version && wrangler deploy --config wrangler.dev.toml",
+    "deploy:public": "npm run prebuild-version && wrangler deploy",
+    "migrate": "wrangler d1 migrations apply DB --config wrangler.dev.toml --remote",
     "types": "wrangler types"
   },
   "dependencies": {
