@@ -464,11 +464,17 @@ export async function callImageGeneration(
     const maxAttempts = targetCount + 2;
     let transientRetries = 0;
     const maxTransientRetries = 2;
+    // Mask + multi-image requests are slow; many upstream gateways hit a ~60s
+    // timeout when n>1, returning 502 even though a single-image call would
+    // succeed. Force n=1 per call when a mask is present so each call stays
+    // under the gateway window.
+    const useSingleImagePerCall = !!payload.mask;
     while (entries.length < targetCount && attempt < maxAttempts) {
       attempt += 1;
       const remaining = targetCount - entries.length;
+      const perCall = useSingleImagePerCall ? 1 : remaining;
       try {
-        const produced = await runOneCall(remaining, attempt);
+        const produced = await runOneCall(perCall, attempt);
         for (const e of produced) {
           if (entries.length < targetCount) entries.push(e);
         }

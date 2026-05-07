@@ -400,6 +400,36 @@
       50%  { transform: translateX(0%)   scaleX(0.5); width: 50%; }
       100% { transform: translateX(200%) scaleX(0.5); }
     }
+    .mask-tool-btn {
+      padding: 0.25rem 0.625rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: rgb(212 212 216);
+      transition: background-color .15s, color .15s;
+    }
+    .mask-tool-btn:hover { background: rgb(39 39 42); }
+    .mask-tool-btn.is-active {
+      background: rgba(16, 185, 129, 0.18);
+      color: rgb(110 231 183);
+    }
+    #maskCanvas { touch-action: none; }
+    #maskOverlay {
+      position: absolute;
+      pointer-events: none;
+      border: 1px dashed rgba(110, 231, 183, 0.95);
+      background: rgba(16, 185, 129, 0.18);
+      border-radius: 2px;
+      display: none;
+    }
+    #maskCursor {
+      position: absolute;
+      pointer-events: none;
+      border: 1px solid rgba(255, 255, 255, 0.85);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
+      border-radius: 9999px;
+      transform: translate(-50%, -50%);
+      display: none;
+    }
   </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen">
@@ -631,20 +661,29 @@
         </div>
         <div class="flex flex-wrap items-center gap-3 mb-3 text-xs text-zinc-300">
           <div class="inline-flex rounded-lg border border-zinc-700 overflow-hidden">
-            <button type="button" id="maskToolPaint" onclick="setMaskTool('paint')" class="px-2.5 py-1 text-xs font-medium bg-emerald-600/20 text-emerald-300" data-i18n="mask.paint">画笔</button>
-            <button type="button" id="maskToolErase" onclick="setMaskTool('erase')" class="px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800" data-i18n="mask.erase">擦除</button>
+            <button type="button" id="maskToolBrush" onclick="setMaskTool('brush')" class="mask-tool-btn is-active" data-i18n="mask.brush">画笔</button>
+            <button type="button" id="maskToolErase" onclick="setMaskTool('erase')" class="mask-tool-btn" data-i18n="mask.erase">擦除</button>
+            <button type="button" id="maskToolRect" onclick="setMaskTool('rect')" class="mask-tool-btn" data-i18n="mask.rect">矩形</button>
+            <button type="button" id="maskToolEllipse" onclick="setMaskTool('ellipse')" class="mask-tool-btn" data-i18n="mask.ellipse">椭圆</button>
+            <button type="button" id="maskToolLasso" onclick="setMaskTool('lasso')" class="mask-tool-btn" data-i18n="mask.lasso">套索</button>
           </div>
-          <label class="flex items-center gap-2">
+          <label class="flex items-center gap-2" id="maskBrushSizeWrap">
             <span data-i18n="mask.size">画笔粗细</span>
             <input id="maskBrushSize" type="range" min="4" max="160" step="2" value="40" class="w-32 accent-emerald-500">
             <span id="maskBrushSizeLabel" class="font-mono text-zinc-400 w-8 text-right">40</span>
           </label>
-          <button type="button" onclick="clearMaskCanvas()" class="px-2.5 py-1 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800" data-i18n="mask.clear">清空</button>
+          <div class="inline-flex rounded-lg border border-zinc-700 overflow-hidden">
+            <button type="button" onclick="invertMaskCanvas()" class="px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800" data-i18n="mask.invert">反相</button>
+            <button type="button" onclick="fillMaskCanvas()" class="px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800" data-i18n="mask.fillAll">全选</button>
+            <button type="button" onclick="clearMaskCanvas()" class="px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800" data-i18n="mask.clear">清空</button>
+          </div>
           <span id="maskStatus" class="text-zinc-500 ml-auto"></span>
         </div>
         <div id="maskStage" class="relative bg-zinc-950/80 rounded-xl border border-zinc-800 overflow-hidden flex items-center justify-center" style="min-height: 200px; max-height: 60vh;">
           <img id="maskBaseImg" alt="" class="block max-w-full max-h-[60vh] object-contain pointer-events-none select-none">
-          <canvas id="maskCanvas" class="absolute inset-0 m-auto cursor-crosshair touch-none" style="mix-blend-mode: normal;"></canvas>
+          <canvas id="maskCanvas" class="absolute inset-0 m-auto cursor-crosshair" style="mix-blend-mode: normal;"></canvas>
+          <div id="maskOverlay"></div>
+          <div id="maskCursor"></div>
         </div>
         <div class="flex gap-2 pt-4 mt-3 border-t border-zinc-800">
           <button onclick="closeMaskEditor()" class="flex-1 px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-300 text-sm font-medium hover:bg-zinc-800 transition-colors" data-i18n="common.cancel">取消</button>
@@ -1692,11 +1731,17 @@
         'prompt.helper.errNoOutput': '尚无可应用的建议',
         'prompt.helper.errFail': '整理失败',
         'mask.title': '蒙版（局部改图）',
-        'mask.subtitle': '用画笔涂抹希望模型重画的区域。涂白处会被替换，其余区域尽量保留。',
-        'mask.paint': '画笔',
+        'mask.subtitle': '使用画笔/矩形/椭圆/套索标记希望模型重画的区域；涂白处会被替换，其余区域尽量保留。',
+        'mask.brush': '画笔',
         'mask.erase': '擦除',
+        'mask.rect': '矩形',
+        'mask.ellipse': '椭圆',
+        'mask.lasso': '套索',
+        'mask.invert': '反相',
+        'mask.fillAll': '全选',
         'mask.size': '画笔粗细',
         'mask.clear': '清空',
+        'mask.lassoHint': '点击添加节点，双击或回车闭合',
         'mask.apply': '应用蒙版',
         'mask.remove': '移除蒙版',
         'mask.badge': '蒙版',
@@ -2021,11 +2066,17 @@
         'prompt.helper.errNoOutput': 'No suggestion to apply yet',
         'prompt.helper.errFail': 'Refine failed',
         'mask.title': 'Mask (inpainting)',
-        'mask.subtitle': 'Paint the area you want the model to repaint. Painted area is replaced; the rest is preserved.',
-        'mask.paint': 'Paint',
+        'mask.subtitle': 'Mark areas with brush / rectangle / ellipse / lasso; painted regions get replaced, the rest is preserved.',
+        'mask.brush': 'Brush',
         'mask.erase': 'Erase',
+        'mask.rect': 'Rectangle',
+        'mask.ellipse': 'Ellipse',
+        'mask.lasso': 'Lasso',
+        'mask.invert': 'Invert',
+        'mask.fillAll': 'Fill all',
         'mask.size': 'Brush size',
         'mask.clear': 'Clear',
+        'mask.lassoHint': 'Click to add points, double-click or Enter to close',
         'mask.apply': 'Apply mask',
         'mask.remove': 'Remove mask',
         'mask.badge': 'Mask',
@@ -3813,8 +3864,8 @@
           ? `<span class="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-emerald-600/90 text-[10px] font-medium text-white pointer-events-none">${escapeHtml(t('mask.badge'))}</span>`
           : '';
         const maskBtn = idx === 0
-          ? `<button type="button" onclick="openMaskEditor()" title="${escapeAttribute(t('mask.editTooltip'))}" class="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-zinc-950/80 text-zinc-100 hover:bg-emerald-600 flex items-center justify-center">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 11l3 3L21.5 4.5a2.121 2.121 0 00-3-3L9 11zM3 17v4h4l11-11"/></svg>
+          ? `<button type="button" onclick="openMaskEditor()" title="${escapeAttribute(t('mask.editTooltip'))}" class="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-zinc-950/80 text-zinc-100 hover:bg-emerald-600 flex items-center justify-center p-0">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;"><path d="M15.232 5.232l3.536 3.536M9 11l3 3L21.5 4.5a2.121 2.121 0 00-3-3L9 11zM3 17v4h4l11-11"/></svg>
             </button>`
           : '';
         tile.innerHTML = `
@@ -5222,7 +5273,17 @@
     }
 
     // ===== Mask editor =====
-    const maskState = { tool: 'paint', brush: 40, drawing: false, last: null, baseW: 0, baseH: 0 };
+    const MASK_PIXEL_CAP = 4096;
+    const maskState = {
+      tool: 'brush',
+      brush: 40,
+      drawing: false,
+      last: null,
+      baseW: 0,
+      baseH: 0,
+      shapeStart: null,
+      lassoPts: [],
+    };
 
     function openMaskEditor() {
       if (referenceImages.length === 0) { showToast(t('mask.needRef'), 'error'); return; }
@@ -5236,8 +5297,7 @@
         const dispH = baseImg.clientHeight;
         const naturalW = baseImg.naturalWidth || dispW;
         const naturalH = baseImg.naturalHeight || dispH;
-        const cap = 1024;
-        const scale = Math.min(1, cap / Math.max(naturalW, naturalH));
+        const scale = Math.min(1, MASK_PIXEL_CAP / Math.max(naturalW, naturalH));
         const internalW = Math.max(1, Math.round(naturalW * scale));
         const internalH = Math.max(1, Math.round(naturalH * scale));
         canvas.width = internalW;
@@ -5280,7 +5340,7 @@
       baseImg.src = referenceImages[0].dataUrl;
       modal.classList.remove('hidden');
       document.body.style.overflow = 'hidden';
-      setMaskTool('paint');
+      setMaskTool('brush');
       const sizeInput = document.getElementById('maskBrushSize');
       sizeInput.value = String(maskState.brush);
       document.getElementById('maskBrushSizeLabel').textContent = String(maskState.brush);
@@ -5293,22 +5353,58 @@
     function closeMaskEditor() {
       document.getElementById('maskModal').classList.add('hidden');
       document.body.style.overflow = '';
+      hideMaskOverlay();
+      hideMaskCursor();
     }
     function setMaskTool(tool) {
-      maskState.tool = tool === 'erase' ? 'erase' : 'paint';
-      const paintBtn = document.getElementById('maskToolPaint');
-      const eraseBtn = document.getElementById('maskToolErase');
-      const active = 'bg-emerald-600/20 text-emerald-300';
-      const idle = 'text-zinc-300 hover:bg-zinc-800';
-      if (paintBtn && eraseBtn) {
-        paintBtn.className = 'px-2.5 py-1 text-xs font-medium ' + (maskState.tool === 'paint' ? active : idle);
-        eraseBtn.className = 'px-2.5 py-1 text-xs font-medium ' + (maskState.tool === 'erase' ? active : idle);
+      const allowed = ['brush', 'erase', 'rect', 'ellipse', 'lasso'];
+      maskState.tool = allowed.includes(tool) ? tool : 'brush';
+      const ids = { brush: 'maskToolBrush', erase: 'maskToolErase', rect: 'maskToolRect', ellipse: 'maskToolEllipse', lasso: 'maskToolLasso' };
+      Object.entries(ids).forEach(([t, id]) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('is-active', maskState.tool === t);
+      });
+      const showBrushSize = maskState.tool === 'brush' || maskState.tool === 'erase';
+      const sizeWrap = document.getElementById('maskBrushSizeWrap');
+      if (sizeWrap) sizeWrap.style.display = showBrushSize ? '' : 'none';
+      const canvas = document.getElementById('maskCanvas');
+      if (canvas) {
+        const cursors = { brush: 'crosshair', erase: 'crosshair', rect: 'crosshair', ellipse: 'crosshair', lasso: 'crosshair' };
+        canvas.style.cursor = cursors[maskState.tool] || 'crosshair';
       }
+      maskState.shapeStart = null;
+      maskState.lassoPts = [];
+      hideMaskOverlay();
     }
     function clearMaskCanvas() {
       const canvas = document.getElementById('maskCanvas');
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      renderMaskStatus();
+    }
+    function fillMaskCanvas() {
+      const canvas = document.getElementById('maskCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      renderMaskStatus();
+    }
+    function invertMaskCanvas() {
+      const canvas = document.getElementById('maskCanvas');
+      const ctx = canvas.getContext('2d');
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < img.data.length; i += 4) {
+        if (img.data[i + 3] > 0) {
+          img.data[i + 3] = 0;
+        } else {
+          img.data[i] = 255;
+          img.data[i + 1] = 255;
+          img.data[i + 2] = 255;
+          img.data[i + 3] = 217;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
       renderMaskStatus();
     }
     function renderMaskStatus() {
@@ -5330,12 +5426,46 @@
       const y = (evt.clientY - rect.top) * canvas.height / rect.height;
       return { x, y };
     }
+    function maskStagePos(evt) {
+      const stage = document.getElementById('maskStage');
+      const rect = stage.getBoundingClientRect();
+      return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+    }
+    function showMaskOverlay({ x, y, w, h, ellipse }) {
+      const ov = document.getElementById('maskOverlay');
+      if (!ov) return;
+      ov.style.display = 'block';
+      ov.style.left = x + 'px';
+      ov.style.top = y + 'px';
+      ov.style.width = w + 'px';
+      ov.style.height = h + 'px';
+      ov.style.borderRadius = ellipse ? '9999px' : '2px';
+    }
+    function hideMaskOverlay() {
+      const ov = document.getElementById('maskOverlay');
+      if (ov) ov.style.display = 'none';
+    }
+    function showMaskCursor(evt, sizePx) {
+      const cur = document.getElementById('maskCursor');
+      if (!cur) return;
+      cur.style.display = 'block';
+      const pos = maskStagePos(evt);
+      cur.style.left = pos.x + 'px';
+      cur.style.top = pos.y + 'px';
+      cur.style.width = sizePx + 'px';
+      cur.style.height = sizePx + 'px';
+    }
+    function hideMaskCursor() {
+      const cur = document.getElementById('maskCursor');
+      if (cur) cur.style.display = 'none';
+    }
     let maskEventsAttached = false;
     function attachMaskCanvasEvents() {
       if (maskEventsAttached) return;
       maskEventsAttached = true;
       const canvas = document.getElementById('maskCanvas');
-      const drawTo = (pt) => {
+
+      const paintStroke = (pt) => {
         const ctx = canvas.getContext('2d');
         const rectScale = canvas.width / canvas.getBoundingClientRect().width;
         const radius = Math.max(1, (maskState.brush * rectScale) / 2);
@@ -5362,27 +5492,166 @@
         }
         maskState.last = pt;
       };
+
+      const finishShape = (endStagePt) => {
+        if (!maskState.shapeStart) return;
+        const start = maskState.shapeStart;
+        const x = Math.min(start.canvas.x, endStagePt.canvas.x);
+        const y = Math.min(start.canvas.y, endStagePt.canvas.y);
+        const w = Math.abs(endStagePt.canvas.x - start.canvas.x);
+        const h = Math.abs(endStagePt.canvas.y - start.canvas.y);
+        if (w < 2 || h < 2) return;
+        const ctx = canvas.getContext('2d');
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        if (maskState.tool === 'rect') {
+          ctx.fillRect(x, y, w, h);
+        } else if (maskState.tool === 'ellipse') {
+          ctx.beginPath();
+          ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      };
+
+      const finishLasso = () => {
+        if (maskState.lassoPts.length < 3) return;
+        const ctx = canvas.getContext('2d');
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.beginPath();
+        const [first, ...rest] = maskState.lassoPts;
+        ctx.moveTo(first.x, first.y);
+        rest.forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+      };
+
+      const drawLassoPreviewPath = () => {
+        if (maskState.lassoPts.length < 1) { hideMaskOverlay(); return; }
+        const stage = document.getElementById('maskStage');
+        const stageRect = stage.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        const offX = canvasRect.left - stageRect.left;
+        const offY = canvasRect.top - stageRect.top;
+        const scaleX = canvasRect.width / canvas.width;
+        const scaleY = canvasRect.height / canvas.height;
+        let svg = stage.querySelector('svg.lasso-preview');
+        if (!svg) {
+          svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('class', 'lasso-preview');
+          svg.style.position = 'absolute';
+          svg.style.inset = '0';
+          svg.style.pointerEvents = 'none';
+          svg.style.width = '100%';
+          svg.style.height = '100%';
+          stage.appendChild(svg);
+        }
+        svg.style.display = 'block';
+        const d = maskState.lassoPts.map((p, i) => {
+          const sx = offX + p.x * scaleX;
+          const sy = offY + p.y * scaleY;
+          return (i === 0 ? 'M' : 'L') + sx.toFixed(1) + ',' + sy.toFixed(1);
+        }).join(' ');
+        svg.innerHTML = `<path d="${d}" fill="rgba(16,185,129,0.18)" stroke="rgba(110,231,183,0.95)" stroke-width="1" stroke-dasharray="4,3"/>`;
+      };
+
+      const hideLassoPreview = () => {
+        const stage = document.getElementById('maskStage');
+        const svg = stage.querySelector('svg.lasso-preview');
+        if (svg) svg.style.display = 'none';
+      };
+
       canvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         canvas.setPointerCapture?.(e.pointerId);
-        maskState.drawing = true;
-        maskState.last = null;
-        drawTo(maskCanvasPos(canvas, e));
+        const cv = maskCanvasPos(canvas, e);
+        const sg = maskStagePos(e);
+        if (maskState.tool === 'brush' || maskState.tool === 'erase') {
+          maskState.drawing = true;
+          maskState.last = null;
+          paintStroke(cv);
+        } else if (maskState.tool === 'rect' || maskState.tool === 'ellipse') {
+          maskState.drawing = true;
+          maskState.shapeStart = { canvas: cv, stage: sg };
+        } else if (maskState.tool === 'lasso') {
+          if (!maskState.drawing) {
+            maskState.drawing = true;
+            maskState.lassoPts = [cv];
+          } else {
+            maskState.lassoPts.push(cv);
+          }
+          drawLassoPreviewPath();
+        }
       });
       canvas.addEventListener('pointermove', (e) => {
-        if (!maskState.drawing) return;
-        e.preventDefault();
-        drawTo(maskCanvasPos(canvas, e));
+        if (maskState.tool === 'brush' || maskState.tool === 'erase') {
+          const cssSize = maskState.brush * (canvas.getBoundingClientRect().width / canvas.width);
+          showMaskCursor(e, cssSize);
+          if (!maskState.drawing) return;
+          e.preventDefault();
+          paintStroke(maskCanvasPos(canvas, e));
+        } else if (maskState.tool === 'rect' || maskState.tool === 'ellipse') {
+          if (!maskState.drawing || !maskState.shapeStart) return;
+          e.preventDefault();
+          const sg = maskStagePos(e);
+          const start = maskState.shapeStart.stage;
+          const x = Math.min(start.x, sg.x);
+          const y = Math.min(start.y, sg.y);
+          const w = Math.abs(sg.x - start.x);
+          const h = Math.abs(sg.y - start.y);
+          showMaskOverlay({ x, y, w, h, ellipse: maskState.tool === 'ellipse' });
+        } else if (maskState.tool === 'lasso') {
+          if (!maskState.drawing) return;
+          const cv = maskCanvasPos(canvas, e);
+          const last = maskState.lassoPts[maskState.lassoPts.length - 1];
+          if (!last || Math.hypot(cv.x - last.x, cv.y - last.y) > 4) {
+            maskState.lassoPts.push(cv);
+            drawLassoPreviewPath();
+          }
+        } else {
+          hideMaskCursor();
+        }
       });
+      canvas.addEventListener('pointerleave', () => hideMaskCursor());
+
       const stop = (e) => {
         if (!maskState.drawing) return;
-        maskState.drawing = false;
-        maskState.last = null;
+        if (maskState.tool === 'brush' || maskState.tool === 'erase') {
+          maskState.drawing = false;
+          maskState.last = null;
+        } else if (maskState.tool === 'rect' || maskState.tool === 'ellipse') {
+          const cv = maskCanvasPos(canvas, e);
+          finishShape({ canvas: cv });
+          maskState.drawing = false;
+          maskState.shapeStart = null;
+          hideMaskOverlay();
+        }
         renderMaskStatus();
       };
       canvas.addEventListener('pointerup', stop);
       canvas.addEventListener('pointercancel', stop);
-      canvas.addEventListener('pointerleave', stop);
+
+      canvas.addEventListener('dblclick', (e) => {
+        if (maskState.tool !== 'lasso' || !maskState.drawing) return;
+        e.preventDefault();
+        finishLasso();
+        maskState.drawing = false;
+        maskState.lassoPts = [];
+        hideLassoPreview();
+        renderMaskStatus();
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (document.getElementById('maskModal').classList.contains('hidden')) return;
+        if (e.key === 'Enter' && maskState.tool === 'lasso' && maskState.drawing) {
+          e.preventDefault();
+          finishLasso();
+          maskState.drawing = false;
+          maskState.lassoPts = [];
+          hideLassoPreview();
+          renderMaskStatus();
+        }
+      });
     }
     async function applyMaskEditor() {
       const canvas = document.getElementById('maskCanvas');
@@ -5401,19 +5670,26 @@
         return;
       }
       const out = document.createElement('canvas');
-      out.width = canvas.width;
-      out.height = canvas.height;
+      out.width = maskState.baseW || canvas.width;
+      out.height = maskState.baseH || canvas.height;
       const outCtx = out.getContext('2d');
-      const outImg = outCtx.createImageData(out.width, out.height);
+      const tmp = document.createElement('canvas');
+      tmp.width = canvas.width;
+      tmp.height = canvas.height;
+      const tctx = tmp.getContext('2d');
+      const binary = tctx.createImageData(canvas.width, canvas.height);
       for (let i = 0; i < src.data.length; i += 4) {
-        const a = src.data[i + 3];
-        const v = a > 0 ? 255 : 0;
-        outImg.data[i] = v;
-        outImg.data[i + 1] = v;
-        outImg.data[i + 2] = v;
-        outImg.data[i + 3] = 255;
+        const v = src.data[i + 3] > 0 ? 255 : 0;
+        binary.data[i] = v;
+        binary.data[i + 1] = v;
+        binary.data[i + 2] = v;
+        binary.data[i + 3] = 255;
       }
-      outCtx.putImageData(outImg, 0, 0);
+      tctx.putImageData(binary, 0, 0);
+      outCtx.imageSmoothingEnabled = false;
+      outCtx.fillStyle = '#000';
+      outCtx.fillRect(0, 0, out.width, out.height);
+      outCtx.drawImage(tmp, 0, 0, out.width, out.height);
       referenceMaskDataUrl = out.toDataURL('image/png');
       renderReferencePreviews();
       closeMaskEditor();
