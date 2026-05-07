@@ -462,12 +462,27 @@ export async function callImageGeneration(
   } else {
     let attempt = 0;
     const maxAttempts = targetCount + 2;
+    let transientRetries = 0;
+    const maxTransientRetries = 2;
     while (entries.length < targetCount && attempt < maxAttempts) {
       attempt += 1;
       const remaining = targetCount - entries.length;
-      const produced = await runOneCall(remaining, attempt);
-      for (const e of produced) {
-        if (entries.length < targetCount) entries.push(e);
+      try {
+        const produced = await runOneCall(remaining, attempt);
+        for (const e of produced) {
+          if (entries.length < targetCount) entries.push(e);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
+        if (transient && transientRetries < maxTransientRetries) {
+          transientRetries += 1;
+          const backoffMs = 800 * transientRetries;
+          console.warn("upstream transient failure, retrying", { attempt, transientRetries, backoffMs, msg });
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          continue;
+        }
+        throw e;
       }
     }
   }
