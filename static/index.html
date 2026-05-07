@@ -2498,9 +2498,10 @@
       if (btn) { btn.disabled = true; btn.textContent = t('gallery.selectAllAcrossLoading'); }
       try {
         let page = 1;
-        const pageSize = 100;
+        const pageSize = 200;
+        const maxPages = 50;
         const scope = galleryScope === 'all' ? '&scope=all' : '';
-        while (page <= 200) {
+        while (page <= maxPages) {
           const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
           const items = Array.isArray(data.images) ? data.images : [];
           for (const item of items) gallerySelectedIds.add(item.id);
@@ -4052,9 +4053,9 @@
     }
 
     function pollIntervalMs(elapsedMs) {
-      if (elapsedMs < 60_000) return 20_000;
-      if (elapsedMs < 180_000) return 30_000;
-      return 45_000;
+      if (elapsedMs < 60_000) return 30_000;
+      if (elapsedMs < 180_000) return 45_000;
+      return 60_000;
     }
 
     async function pollGenerateJob(jobId) {
@@ -5427,14 +5428,15 @@
       maskState.drawing = false;
       maskState.lassoPts = [];
       hideLassoPreview();
-      updateLassoActions();
       renderMaskStatus();
+      setMaskTool('brush');
     }
     function cancelMaskLasso() {
       maskState.drawing = false;
       maskState.lassoPts = [];
       hideLassoPreview();
       updateLassoActions();
+      setMaskTool('brush');
     }
     function clearMaskCanvas() {
       const canvas = document.getElementById('maskCanvas');
@@ -5681,24 +5683,16 @@
       canvas.addEventListener('pointercancel', stop);
 
       canvas.addEventListener('dblclick', (e) => {
-        if (maskState.tool !== 'lasso' || !maskState.drawing) return;
+        if (maskState.tool !== 'lasso' || maskState.lassoPts.length < 3) return;
         e.preventDefault();
-        finishLasso();
-        maskState.drawing = false;
-        maskState.lassoPts = [];
-        hideLassoPreview();
-        renderMaskStatus();
+        finishMaskLasso();
       });
 
       document.addEventListener('keydown', (e) => {
         if (document.getElementById('maskModal').classList.contains('hidden')) return;
-        if (e.key === 'Enter' && maskState.tool === 'lasso' && maskState.drawing) {
+        if (e.key === 'Enter' && maskState.tool === 'lasso' && maskState.lassoPts.length >= 3) {
           e.preventDefault();
-          finishLasso();
-          maskState.drawing = false;
-          maskState.lassoPts = [];
-          hideLassoPreview();
-          renderMaskStatus();
+          finishMaskLasso();
         }
       });
     }
