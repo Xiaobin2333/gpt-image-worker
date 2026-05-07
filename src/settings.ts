@@ -47,6 +47,7 @@ export interface RuntimeLimits {
   responses_concurrency: number;
   access_session_minutes: number;
   admin_session_minutes: number;
+  prompt_helper_model: string;
 }
 
 const DEFAULT_RATE_LIMIT: RateLimitConfig = { enabled: false, limit: 10, window_seconds: 60 };
@@ -381,6 +382,9 @@ export async function loadRuntimeLimits(env: Bindings): Promise<RuntimeLimits> {
       LIMITS_BOUNDS.admin_session_minutes.min,
       LIMITS_BOUNDS.admin_session_minutes.max,
     ),
+    prompt_helper_model: typeof stored?.prompt_helper_model === "string" && stored.prompt_helper_model.trim()
+      ? stored.prompt_helper_model.trim()
+      : "gpt-4o-mini",
   };
 }
 
@@ -460,6 +464,9 @@ export async function saveRuntimeLimits(
           LIMITS_BOUNDS.admin_session_minutes.min,
           LIMITS_BOUNDS.admin_session_minutes.max,
         ),
+    prompt_helper_model: typeof patch.prompt_helper_model === "string"
+      ? patch.prompt_helper_model.trim() || current.prompt_helper_model
+      : current.prompt_helper_model,
   };
   await env.SETTINGS.put(LIMITS_KEY, JSON.stringify(next));
   return next;

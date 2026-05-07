@@ -414,6 +414,7 @@ app.post("/api/admin/limits", async (c) => {
     responses_concurrency: unknown;
     access_session_minutes: unknown;
     admin_session_minutes: unknown;
+    prompt_helper_model: unknown;
   }>;
   try {
     body = await c.req.json();
@@ -431,6 +432,7 @@ app.post("/api/admin/limits", async (c) => {
   if (typeof body.responses_concurrency === "number") patch.responses_concurrency = body.responses_concurrency;
   if (typeof body.access_session_minutes === "number") patch.access_session_minutes = body.access_session_minutes;
   if (typeof body.admin_session_minutes === "number") patch.admin_session_minutes = body.admin_session_minutes;
+  if (typeof body.prompt_helper_model === "string") patch.prompt_helper_model = body.prompt_helper_model;
   const next = await saveRuntimeLimits(c.env, patch);
   return c.json({ ...next, bounds: LIMITS_BOUNDS });
 });
@@ -1034,6 +1036,188 @@ app.get("/api/gallery/:id/raw", async (c) => {
     if (!admin && !isOwner) return jsonError(404, "Gallery entry not found");
   }
   return c.json(entry);
+});
+
+app.post("/api/prompt/refine", async (c) => {
+  const [apiState, rlConfig, turnstile, limits] = await Promise.all([
+    cachedApiState(c),
+    cachedRateLimit(c),
+    cachedTurnstile(c),
+    cachedLimits(c),
+  ]);
+  const active = getActivePresetFromState(apiState);
+  if (!active.api_url) return jsonError(400, "API URL not configured");
+  if (!active.api_key) return jsonError(400, "API Key not configured");
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = (await c.req.json()) as Record<string, unknown>;
+  } catch {
+    return jsonError(400, "Request body must be JSON");
+  }
+  const userText = typeof raw.text === "string" ? raw.text.trim() : "";
+  if (!userText) return jsonError(400, "text is required");
+  if (userText.length > limits.prompt_max_chars) {
+    return jsonError(400, `text exceeds ${limits.prompt_max_chars} characters`);
+  }
+  const ctx = (raw.context && typeof raw.context === "object" ? raw.context : {}) as Record<string, unknown>;
+  const targetLang = raw.lang === "en" ? "en" : "zh";
+  const model = typeof raw.model === "string" && raw.model.trim()
+    ? raw.model.trim()
+    : limits.prompt_helper_model;
+
+  const adminBypass = await isAdminRequest(c);
+  if (!adminBypass && rlConfig.enabled) {
+    const ip = getClientIp(c) || "unknown";
+    const rl = await checkRateLimit(c.env, "refine:" + ip, rlConfig.limit, rlConfig.window_seconds);
+    if (!rl.allowed) {
+      return new Response(
+        JSON.stringify({ status: "error", detail: `Rate limit exceeded. Try again in ${rl.retryAfterSeconds}s.` }),
+        { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(rl.retryAfterSeconds) } },
+      );
+    }
+  }
+  if (turnstile.enabled && turnstile.secret_key && !adminBypass) {
+    const token = typeof raw.turnstile_token === "string" ? raw.turnstile_token.trim() : "";
+    if (!token) return jsonError(400, "Captcha required");
+    const result = await verifyTurnstileToken(turnstile.secret_key, token, getClientIp(c));
+    if (!result.success) return jsonError(403, "Captcha verification failed");
+  }
+
+  const sysLines = targetLang === "en"
+    ? [
+        "You are a senior text-to-image prompt engineer.",
+        "Rewrite the user's idea into ONE concise English image prompt suitable for diffusion-style image APIs.",
+        "Keep all subjects/actions/styles the user mentioned. Add useful visual details (lighting, lens, composition, mood) only if they help.",
+        "No prefaces, no explanations, no quotes. Output a single paragraph under 1500 characters.",
+      ]
+    : [
+        "你是资深的文生图提示词工程师。",
+        "把用户的想法改写成一段简洁的中文图像提示词，适合直接喂给扩散类图像 API。",
+        "保留用户提到的全部主体/动作/风格。仅在必要时补充光照、镜头、构图、氛围等可视细节。",
+        "不要前言、不要解释、不要引号，输出单段，控制在 1500 字以内。",
+      ];
+  const ctxLines: string[] = [];
+  if (typeof ctx.size === "string" && ctx.size) ctxLines.push(`size=${ctx.size}`);
+  if (typeof ctx.quality === "string" && ctx.quality) ctxLines.push(`quality=${ctx.quality}`);
+  if (typeof ctx.output_format === "string" && ctx.output_format) ctxLines.push(`format=${ctx.output_format}`);
+  if (typeof ctx.api_path === "string" && ctx.api_path) ctxLines.push(`api_path=${ctx.api_path}`);
+  if (ctx.has_reference) ctxLines.push("mode=image-to-image");
+  if (ctx.has_mask) ctxLines.push("mode=inpaint");
+  if (typeof ctx.template === "string" && ctx.template) ctxLines.push(`template=${ctx.template}`);
+  const sysContent = [...sysLines, ctxLines.length ? `Context: ${ctxLines.join(", ")}` : ""].filter(Boolean).join("\n");
+
+  const apiUrl = `${active.api_url.replace(/\/+$/, "")}/v1/chat/completions`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${active.api_key}`,
+        "Content-Type": "application/json",
+        "User-Agent": "gpt-image-worker",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.6,
+        messages: [
+          { role: "system", content: sysContent },
+          { role: "user", content: userText },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      let detail = text.slice(0, 400);
+      try {
+        const j = JSON.parse(text);
+        const msg = j?.error?.message;
+        if (typeof msg === "string") detail = msg;
+      } catch {}
+      return jsonError(resp.status >= 500 ? 502 : resp.status, `Upstream chat error: ${detail}`);
+    }
+    let parsed: { choices?: Array<{ message?: { content?: string } }> };
+    try { parsed = JSON.parse(text); } catch { return jsonError(502, "Upstream returned non-JSON"); }
+    const refined = parsed?.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!refined) return jsonError(502, "Upstream returned empty content");
+    return c.json({ status: "ok", prompt: refined, model });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (controller.signal.aborted) return jsonError(504, "Chat completion timed out");
+    return jsonError(502, `Failed to reach chat endpoint: ${msg}`);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+app.post("/api/admin/test-api", async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  let raw: Record<string, unknown> = {};
+  try { raw = (await c.req.json()) as Record<string, unknown>; } catch {}
+  const apiState = await loadApiSettingsState(c.env);
+  const active = getActivePresetFromState(apiState);
+  const apiUrl = (typeof raw.api_url === "string" && raw.api_url.trim() ? raw.api_url.trim() : active.api_url).replace(/\/+$/, "");
+  const apiKey = typeof raw.api_key === "string" && raw.api_key.trim() ? raw.api_key.trim() : active.api_key;
+  const mode = raw.mode === "image" ? "image" : "models";
+  if (!apiUrl) return jsonError(400, "API URL not configured");
+  if (!apiKey) return jsonError(400, "API Key not configured");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  const startedAt = Date.now();
+  try {
+    if (mode === "models") {
+      const resp = await fetch(`${apiUrl}/v1/models`, {
+        headers: { "Authorization": `Bearer ${apiKey}`, "User-Agent": "gpt-image-worker" },
+        signal: controller.signal,
+      });
+      const text = await resp.text();
+      const elapsed = Date.now() - startedAt;
+      if (!resp.ok) {
+        return c.json({ status: "error", elapsed_ms: elapsed, http_status: resp.status, detail: text.slice(0, 300) });
+      }
+      let modelCount = 0;
+      let sample: string[] = [];
+      try {
+        const j = JSON.parse(text);
+        const list = Array.isArray(j?.data) ? j.data : [];
+        modelCount = list.length;
+        sample = list.slice(0, 8).map((m: unknown) => (m && typeof m === "object" && typeof (m as { id?: unknown }).id === "string" ? (m as { id: string }).id : ""))
+          .filter(Boolean);
+      } catch {}
+      return c.json({ status: "ok", mode, elapsed_ms: elapsed, http_status: resp.status, model_count: modelCount, sample });
+    }
+    const model = typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : "gpt-image-2";
+    const resp = await fetch(`${apiUrl}/v1/images/generations`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json", "User-Agent": "gpt-image-worker" },
+      body: JSON.stringify({ model, prompt: "a single small red dot on white background", size: "1024x1024", n: 1, quality: "low" }),
+      signal: controller.signal,
+    });
+    const text = await resp.text();
+    const elapsed = Date.now() - startedAt;
+    if (!resp.ok) {
+      let detail = text.slice(0, 300);
+      try { const j = JSON.parse(text); if (typeof j?.error?.message === "string") detail = j.error.message; } catch {}
+      return c.json({ status: "error", mode, elapsed_ms: elapsed, http_status: resp.status, detail });
+    }
+    let hasImage = false;
+    try {
+      const j = JSON.parse(text);
+      const data = Array.isArray(j?.data) ? j.data : [];
+      hasImage = data.some((d: unknown) => d && typeof d === "object" && (typeof (d as { b64_json?: unknown }).b64_json === "string" || typeof (d as { url?: unknown }).url === "string"));
+    } catch {}
+    return c.json({ status: hasImage ? "ok" : "warn", mode, elapsed_ms: elapsed, http_status: resp.status, has_image: hasImage });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const aborted = controller.signal.aborted;
+    return c.json({ status: "error", mode, elapsed_ms: Date.now() - startedAt, detail: aborted ? "timeout" : msg });
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));

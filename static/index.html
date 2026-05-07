@@ -561,6 +561,100 @@
     </div>
   </div>
 
+  <!-- Prompt Helper Modal -->
+  <div id="promptHelperModal" class="fixed inset-0 z-[80] hidden">
+    <div class="drawer-backdrop absolute inset-0" onclick="closePromptHelper()"></div>
+    <div class="relative flex items-center justify-center h-full p-4">
+      <div class="w-full max-w-xl border border-zinc-800 rounded-2xl bg-zinc-900/95 p-6 shadow-2xl fade-in flex flex-col" style="max-height: 90vh;">
+        <div class="flex items-start justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-lg font-semibold text-zinc-100" data-i18n="prompt.helper.title">提示词助手</h2>
+              <p class="text-xs text-zinc-500" data-i18n="prompt.helper.subtitle">用自然语言描述想要的画面，我帮你整理成更适合提交的提示词</p>
+            </div>
+          </div>
+          <button onclick="closePromptHelper()" class="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="space-y-3 overflow-y-auto pr-1" style="min-height: 0;">
+          <div>
+            <label class="block text-xs font-medium text-zinc-400 mb-1" data-i18n="prompt.helper.input">你的想法</label>
+            <textarea id="promptHelperInput" rows="4"
+              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors resize-none"
+              data-i18n-attr="placeholder:prompt.helper.inputPlaceholder"
+              placeholder="例如：海边日落，少女背影，温暖怀旧"></textarea>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="promptHelperRunBtn" type="button" onclick="runPromptHelper()"
+              class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              <span data-i18n="prompt.helper.run">整理</span>
+            </button>
+            <span id="promptHelperHint" class="text-xs text-zinc-500"></span>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-zinc-400 mb-1" data-i18n="prompt.helper.output">建议提示词</label>
+            <textarea id="promptHelperOutput" rows="6"
+              class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors resize-none font-mono"
+              data-i18n-attr="placeholder:prompt.helper.outputPlaceholder"
+              placeholder="点击「整理」后建议会显示在这里，可以直接编辑"></textarea>
+          </div>
+        </div>
+        <div class="flex gap-2 pt-4 mt-2 border-t border-zinc-800">
+          <button onclick="closePromptHelper()" class="flex-1 px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-300 text-sm font-medium hover:bg-zinc-800 transition-colors" data-i18n="common.cancel">取消</button>
+          <button onclick="copyPromptHelperOutput()" class="px-4 py-2.5 rounded-lg bg-zinc-800 text-zinc-200 text-sm font-medium hover:bg-zinc-700 transition-colors" data-i18n="common.copy">复制</button>
+          <button onclick="applyPromptHelperOutput()" class="flex-1 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 transition-colors" data-i18n="prompt.helper.apply">应用到提示词</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mask Editor Modal -->
+  <div id="maskModal" class="fixed inset-0 z-[80] hidden">
+    <div class="drawer-backdrop absolute inset-0" onclick="closeMaskEditor()"></div>
+    <div class="relative flex items-center justify-center h-full p-4">
+      <div class="w-full max-w-3xl border border-zinc-800 rounded-2xl bg-zinc-900/95 p-5 shadow-2xl fade-in flex flex-col" style="max-height: 92vh;">
+        <div class="flex items-start justify-between mb-3">
+          <div>
+            <h2 class="text-lg font-semibold text-zinc-100" data-i18n="mask.title">蒙版（局部改图）</h2>
+            <p class="text-xs text-zinc-500 mt-0.5" data-i18n="mask.subtitle">用画笔涂抹希望模型重画的区域。涂白处会被替换，其余区域尽量保留。</p>
+          </div>
+          <button onclick="closeMaskEditor()" class="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 mb-3 text-xs text-zinc-300">
+          <div class="inline-flex rounded-lg border border-zinc-700 overflow-hidden">
+            <button type="button" id="maskToolPaint" onclick="setMaskTool('paint')" class="px-2.5 py-1 text-xs font-medium bg-emerald-600/20 text-emerald-300" data-i18n="mask.paint">画笔</button>
+            <button type="button" id="maskToolErase" onclick="setMaskTool('erase')" class="px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800" data-i18n="mask.erase">擦除</button>
+          </div>
+          <label class="flex items-center gap-2">
+            <span data-i18n="mask.size">画笔粗细</span>
+            <input id="maskBrushSize" type="range" min="4" max="160" step="2" value="40" class="w-32 accent-emerald-500">
+            <span id="maskBrushSizeLabel" class="font-mono text-zinc-400 w-8 text-right">40</span>
+          </label>
+          <button type="button" onclick="clearMaskCanvas()" class="px-2.5 py-1 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800" data-i18n="mask.clear">清空</button>
+          <span id="maskStatus" class="text-zinc-500 ml-auto"></span>
+        </div>
+        <div id="maskStage" class="relative bg-zinc-950/80 rounded-xl border border-zinc-800 overflow-hidden flex items-center justify-center" style="min-height: 200px; max-height: 60vh;">
+          <img id="maskBaseImg" alt="" class="block max-w-full max-h-[60vh] object-contain pointer-events-none select-none">
+          <canvas id="maskCanvas" class="absolute inset-0 m-auto cursor-crosshair touch-none" style="mix-blend-mode: normal;"></canvas>
+        </div>
+        <div class="flex gap-2 pt-4 mt-3 border-t border-zinc-800">
+          <button onclick="closeMaskEditor()" class="flex-1 px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-300 text-sm font-medium hover:bg-zinc-800 transition-colors" data-i18n="common.cancel">取消</button>
+          <button id="maskRemoveBtn" onclick="removeMask()" class="px-4 py-2.5 rounded-lg border border-red-800/70 bg-red-950/30 text-red-300 text-sm font-medium hover:bg-red-900/50 transition-colors hidden" data-i18n="mask.remove">移除蒙版</button>
+          <button onclick="applyMaskEditor()" class="flex-1 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 transition-colors" data-i18n="mask.apply">应用蒙版</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Settings Drawer -->
   <div id="settingsDrawer" class="fixed inset-0 z-50 hidden">
     <div class="drawer-backdrop absolute inset-0" onclick="toggleSettings()"></div>
@@ -625,6 +719,21 @@
             <div>
               <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.apiKey">API Key</label>
               <input type="password" id="settingsApiKey" placeholder="sk-..." class="settings-input font-mono">
+            </div>
+            <div>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="runApiTest('models')"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-200 hover:bg-zinc-800 transition-colors">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                  <span data-i18n="settings.test.connect">测试连接</span>
+                </button>
+                <button type="button" onclick="runApiTest('image')"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-200 hover:bg-zinc-800 transition-colors">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                  <span data-i18n="settings.test.image">测试图片模型</span>
+                </button>
+              </div>
+              <p id="settingsTestResult" class="mt-2 text-xs text-zinc-500"></p>
             </div>
           </div>
         </details>
@@ -772,6 +881,11 @@
                 <input type="number" id="settingsResponsesConcurrency" min="1" max="10" step="1" class="settings-input">
                 <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.responsesConcurrency">范围 1 – 10，默认 3。仅 /v1/responses 拆分多次并发时生效</p>
               </div>
+              <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.promptHelperModel">提示词助手模型</label>
+                <input type="text" id="settingsPromptHelperModel" placeholder="gpt-4o-mini" class="settings-input font-mono">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.promptHelperModel">用于「提示词助手」调用 /v1/chat/completions 的模型名</p>
+              </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
@@ -866,7 +980,24 @@
 
       <div class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.prompt">提示词</label>
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <label class="block text-sm font-medium text-zinc-300" data-i18n="generate.prompt">提示词</label>
+            <div class="flex items-center gap-2">
+              <div class="relative">
+                <button type="button" id="templateMenuBtn" onclick="toggleTemplateMenu()"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 6h16M4 12h10M4 18h16"/></svg>
+                  <span data-i18n="prompt.templates">模板</span>
+                </button>
+                <div id="templateMenu" class="hidden absolute right-0 top-full mt-1 z-30 w-72 max-h-80 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/95 shadow-2xl p-1.5"></div>
+              </div>
+              <button type="button" onclick="openPromptHelper()"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-700/60 bg-emerald-600/10 text-xs font-medium text-emerald-300 hover:bg-emerald-600/20 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                <span data-i18n="prompt.helper">提示词助手</span>
+              </button>
+            </div>
+          </div>
           <textarea id="promptInput" rows="4" data-i18n-attr="placeholder:generate.promptPlaceholder" placeholder="一只赛博朋克狐狸站在霓虹灯下的雨夜街头，电影感，超精细..."
             class="w-full bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors resize-none leading-relaxed"></textarea>
           <div class="flex justify-end mt-1.5">
@@ -1541,6 +1672,48 @@
         'error.network': '网络请求失败：{action} → {msg}',
         'error.server': '服务器返回错误（{status}）：{msg}',
         'error.empty': '服务器返回空响应（{action}）',
+        'common.copied': '已复制',
+        'common.copyFail': '复制失败',
+        'prompt.templates': '模板',
+        'prompt.templates.applied': '已应用模板「{name}」',
+        'prompt.helper': '提示词助手',
+        'prompt.helper.title': '提示词助手',
+        'prompt.helper.subtitle': '用自然语言描述想要的画面，我帮你整理成更适合提交的提示词',
+        'prompt.helper.input': '你的想法',
+        'prompt.helper.inputPlaceholder': '例如：海边日落，少女背影，温暖怀旧',
+        'prompt.helper.output': '建议提示词',
+        'prompt.helper.outputPlaceholder': '点击「整理」后建议会显示在这里，可以直接编辑',
+        'prompt.helper.run': '整理',
+        'prompt.helper.apply': '应用到提示词',
+        'prompt.helper.running': '正在整理…',
+        'prompt.helper.done': '已生成建议，可继续编辑后应用',
+        'prompt.helper.applied': '已应用到提示词',
+        'prompt.helper.errEmpty': '请先输入想法',
+        'prompt.helper.errNoOutput': '尚无可应用的建议',
+        'prompt.helper.errFail': '整理失败',
+        'mask.title': '蒙版（局部改图）',
+        'mask.subtitle': '用画笔涂抹希望模型重画的区域。涂白处会被替换，其余区域尽量保留。',
+        'mask.paint': '画笔',
+        'mask.erase': '擦除',
+        'mask.size': '画笔粗细',
+        'mask.clear': '清空',
+        'mask.apply': '应用蒙版',
+        'mask.remove': '移除蒙版',
+        'mask.badge': '蒙版',
+        'mask.editTooltip': '编辑蒙版',
+        'mask.needRef': '请先添加参考图，再设置蒙版',
+        'mask.coverage': '覆盖：{pct}%',
+        'mask.saved': '蒙版已保存',
+        'mask.removed': '蒙版已移除',
+        'settings.promptHelperModel': '提示词助手模型',
+        'settings.range.promptHelperModel': '用于「提示词助手」调用 /v1/chat/completions 的模型名',
+        'settings.test.connect': '测试连接',
+        'settings.test.image': '测试图片模型',
+        'settings.test.running': '测试中…',
+        'settings.test.modelsOk': '连接成功（{ms}ms），可用模型 {count} 个：{sample}',
+        'settings.test.imageOk': '图片接口可用（{ms}ms）',
+        'settings.test.imageWarn': '请求成功但未返回图片（{ms}ms），可能不是图片接口',
+        'settings.test.fail': '测试失败',
       },
       en: {
         'page.title': 'GPT Image Panel',
@@ -1828,6 +2001,48 @@
         'error.network': 'Network error while {action}: {msg}',
         'error.server': 'Server error ({status}): {msg}',
         'error.empty': 'Empty server response while {action}',
+        'common.copied': 'Copied',
+        'common.copyFail': 'Copy failed',
+        'prompt.templates': 'Templates',
+        'prompt.templates.applied': 'Template "{name}" applied',
+        'prompt.helper': 'Prompt helper',
+        'prompt.helper.title': 'Prompt helper',
+        'prompt.helper.subtitle': 'Describe what you want in plain words; I will refine it into a model-friendly prompt.',
+        'prompt.helper.input': 'Your idea',
+        'prompt.helper.inputPlaceholder': 'e.g. seaside sunset, girl from behind, warm nostalgia',
+        'prompt.helper.output': 'Suggested prompt',
+        'prompt.helper.outputPlaceholder': 'The suggestion will appear here after clicking Refine. You can edit before applying.',
+        'prompt.helper.run': 'Refine',
+        'prompt.helper.apply': 'Apply to prompt',
+        'prompt.helper.running': 'Refining…',
+        'prompt.helper.done': 'Suggestion generated; edit and apply.',
+        'prompt.helper.applied': 'Applied to prompt',
+        'prompt.helper.errEmpty': 'Please enter your idea first',
+        'prompt.helper.errNoOutput': 'No suggestion to apply yet',
+        'prompt.helper.errFail': 'Refine failed',
+        'mask.title': 'Mask (inpainting)',
+        'mask.subtitle': 'Paint the area you want the model to repaint. Painted area is replaced; the rest is preserved.',
+        'mask.paint': 'Paint',
+        'mask.erase': 'Erase',
+        'mask.size': 'Brush size',
+        'mask.clear': 'Clear',
+        'mask.apply': 'Apply mask',
+        'mask.remove': 'Remove mask',
+        'mask.badge': 'Mask',
+        'mask.editTooltip': 'Edit mask',
+        'mask.needRef': 'Add a reference image first',
+        'mask.coverage': 'Coverage: {pct}%',
+        'mask.saved': 'Mask saved',
+        'mask.removed': 'Mask removed',
+        'settings.promptHelperModel': 'Prompt helper model',
+        'settings.range.promptHelperModel': 'Model used by Prompt Helper via /v1/chat/completions',
+        'settings.test.connect': 'Test connection',
+        'settings.test.image': 'Test image model',
+        'settings.test.running': 'Testing…',
+        'settings.test.modelsOk': 'Connected ({ms}ms), {count} models available: {sample}',
+        'settings.test.imageOk': 'Image endpoint OK ({ms}ms)',
+        'settings.test.imageWarn': 'Request succeeded but no image returned ({ms}ms); may not be an image endpoint',
+        'settings.test.fail': 'Test failed',
       },
     };
 
@@ -1903,6 +2118,7 @@
     let isAdmin = false;
     let accessRequired = false;
     let referenceImages = [];
+    let referenceMaskDataUrl = null;
     function referenceMaxCount() { return Math.max(0, Number(activeLimits.reference_max_count) || 0); }
     function referenceMaxBytes() { return Math.max(1, Number(activeLimits.reference_max_mb) || 4) * 1024 * 1024; }
     function referenceMaxMb() { return Math.max(1, Number(activeLimits.reference_max_mb) || 4); }
@@ -2546,6 +2762,7 @@
           document.getElementById('settingsResponsesConcurrency').value = lim.value.responses_concurrency ?? 3;
           document.getElementById('settingsAccessSessionMin').value = lim.value.access_session_minutes ?? 180;
           document.getElementById('settingsAdminSessionMin').value = lim.value.admin_session_minutes ?? 180;
+          document.getElementById('settingsPromptHelperModel').value = lim.value.prompt_helper_model || '';
         }
         renderSettingsBadges();
       } catch {}
@@ -2637,6 +2854,7 @@
       const limResponsesConcurrency = clampSetting('settingsResponsesConcurrency', 1, 10, 3);
       const limAccessMin = clampSetting('settingsAccessSessionMin', 5, 10080, 180);
       const limAdminMin = clampSetting('settingsAdminSessionMin', 5, 10080, 180);
+      const limPromptHelperModel = document.getElementById('settingsPromptHelperModel').value.trim();
       if (clampedAny) showToast(t('settings.clamped'), 'success');
 
       const presetName = document.getElementById('settingsPresetName').value.trim();
@@ -2707,6 +2925,7 @@
             responses_concurrency: limResponsesConcurrency,
             access_session_minutes: limAccessMin,
             admin_session_minutes: limAdminMin,
+            prompt_helper_model: limPromptHelperModel,
           }),
         }, 'saving limits');
         cachedLimits = limResp;
@@ -3563,12 +3782,14 @@
     }
 
     function removeReferenceImage(index) {
+      if (index === 0) referenceMaskDataUrl = null;
       referenceImages.splice(index, 1);
       renderReferencePreviews();
     }
 
     function clearReferenceImages() {
       referenceImages = [];
+      referenceMaskDataUrl = null;
       renderReferencePreviews();
     }
 
@@ -3579,15 +3800,27 @@
       if (referenceImages.length === 0) {
         previews.classList.add('hidden');
         clearBtn.classList.add('hidden');
+        if (referenceMaskDataUrl) { referenceMaskDataUrl = null; }
         return;
       }
       previews.classList.remove('hidden');
       clearBtn.classList.remove('hidden');
       referenceImages.forEach((ref, idx) => {
         const tile = document.createElement('div');
-        tile.className = 'relative w-16 h-16 rounded-lg overflow-hidden border border-zinc-700 bg-zinc-900';
+        tile.className = 'relative w-16 h-16 rounded-lg overflow-hidden border border-zinc-700 bg-zinc-900 group';
+        const hasMask = idx === 0 && !!referenceMaskDataUrl;
+        const maskBadge = hasMask
+          ? `<span class="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-emerald-600/90 text-[10px] font-medium text-white pointer-events-none">${escapeHtml(t('mask.badge'))}</span>`
+          : '';
+        const maskBtn = idx === 0
+          ? `<button type="button" onclick="openMaskEditor()" title="${escapeAttribute(t('mask.editTooltip'))}" class="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-zinc-950/80 text-zinc-100 hover:bg-emerald-600 flex items-center justify-center">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 11l3 3L21.5 4.5a2.121 2.121 0 00-3-3L9 11zM3 17v4h4l11-11"/></svg>
+            </button>`
+          : '';
         tile.innerHTML = `
-          <img src="${ref.dataUrl}" alt="${ref.name}" class="w-full h-full object-cover">
+          <img src="${ref.dataUrl}" alt="${escapeAttribute(ref.name)}" class="w-full h-full object-cover">
+          ${maskBadge}
+          ${maskBtn}
           <button type="button" onclick="removeReferenceImage(${idx})" class="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-zinc-950/80 text-zinc-100 text-xs flex items-center justify-center hover:bg-red-600">×</button>
         `;
         previews.appendChild(tile);
@@ -3821,6 +4054,7 @@
       }
       if (referenceImages.length > 0) {
         requestBody.reference_images = referenceImages.map((r) => r.dataUrl);
+        if (referenceMaskDataUrl) requestBody.mask = referenceMaskDataUrl;
       }
       requestBody.is_public = !!document.getElementById('publicToggle').checked;
 
@@ -4802,6 +5036,10 @@
       if (e.key === 'Escape') {
         if (lightboxOpen) {
           closeLightbox();
+        } else if (!document.getElementById('maskModal').classList.contains('hidden')) {
+          closeMaskEditor();
+        } else if (!document.getElementById('promptHelperModal').classList.contains('hidden')) {
+          closePromptHelper();
         } else if (!document.getElementById('sizeDialog').classList.contains('hidden')) {
           closeSizeDialog();
         } else if (!document.getElementById('settingsDrawer').classList.contains('hidden')) {
@@ -4823,6 +5061,390 @@
       document.addEventListener('DOMContentLoaded', attachPreviewInteractions);
     } else {
       attachPreviewInteractions();
+    }
+
+    // ===== Prompt templates =====
+    const PROMPT_TEMPLATES = [
+      { id: 'poster', size: '1024x1536', quality: 'high', zh: '电影海报：{主题}，戏剧化光影，富有冲击力的标题排版区域留白，颗粒胶片质感，高对比度，超细节', en: 'Cinematic movie poster of {subject}, dramatic lighting, bold negative space for title, film-grain texture, high contrast, ultra-detailed' },
+      { id: 'character', size: '1024x1536', quality: 'high', zh: '角色概念图：{主题}，全身立绘，干净灰色背景，柔光，时装设定细节，写实风格，工作室人像', en: 'Character concept art of {subject}, full body, clean grey background, soft light, costume details, realistic studio portrait' },
+      { id: 'interior', size: '1536x1024', quality: 'high', zh: '室内场景：{主题}，自然光，杂志级摄影，柔和阴影，有质感的材质，中焦距，居家氛围', en: 'Interior scene: {subject}, natural daylight, magazine-grade photography, soft shadows, tactile materials, medium focal length, cozy mood' },
+      { id: 'product', size: '1024x1024', quality: 'high', zh: '产品商业摄影：{主题}，纯白背景，柔光箱布光，高细节材质，产品居中，无文字', en: 'Commercial product photo of {subject}, pure white background, softbox lighting, hyper-detailed materials, centered, no text' },
+      { id: 'food', size: '1024x1024', quality: 'high', zh: '美食摄影：{主题}，俯视构图，自然光，浅景深，蒸汽与油亮反光，餐桌道具，杂志感', en: 'Food photography of {subject}, top-down composition, natural light, shallow depth of field, steam & glossy highlights, magazine vibe' },
+      { id: 'logo', size: '1024x1024', quality: 'high', zh: 'Logo 设计：{主题}，矢量风，扁平化，简洁几何，单色或双色，居中，纯色背景，可识别性强', en: 'Logo design for {subject}, vector style, flat, clean geometry, mono or duotone, centered on solid background, highly recognizable' },
+      { id: 'isometric', size: '1024x1024', quality: 'high', zh: '等距插画：{主题}，3D 等距视角，柔和阴影，明亮配色，扁平结构，清晰几何', en: 'Isometric illustration of {subject}, 3D isometric view, soft shadows, bright palette, flat-shaded geometry' },
+      { id: 'anime', size: '1024x1536', quality: 'high', zh: '动漫角色立绘：{主题}，赛璐珞上色，高对比度，柔光，背景虚化，精细线稿，干净轮廓', en: 'Anime character of {subject}, cel-shaded, high contrast, soft light, blurred background, fine lineart, clean silhouette' },
+      { id: 'photoreal', size: '1024x1024', quality: 'high', zh: '写实摄影：{主题}，35mm 镜头，自然光，电影感色调，肤质细节，浅景深', en: 'Photoreal portrait of {subject}, 35mm lens, natural light, cinematic color grading, skin detail, shallow depth of field' },
+      { id: 'pixel', size: '1024x1024', quality: 'medium', zh: '像素艺术：{主题}，16-bit 风格，限定调色板，硬边缘，细节像素描边', en: 'Pixel art of {subject}, 16-bit style, limited palette, hard edges, detailed pixel outline' },
+    ];
+
+    function templateLabel(id) {
+      const map = currentLang === 'en'
+        ? { poster: 'Movie poster', character: 'Character', interior: 'Interior', product: 'Product photo', food: 'Food', logo: 'Logo', isometric: 'Isometric', anime: 'Anime', photoreal: 'Photoreal', pixel: 'Pixel art' }
+        : { poster: '电影海报', character: '角色立绘', interior: '室内场景', product: '产品图', food: '美食', logo: 'Logo', isometric: '等距插画', anime: '动漫角色', photoreal: '写实人像', pixel: '像素艺术' };
+      return map[id] || id;
+    }
+
+    function toggleTemplateMenu() {
+      const menu = document.getElementById('templateMenu');
+      if (!menu) return;
+      const open = !menu.classList.contains('hidden');
+      if (open) { menu.classList.add('hidden'); return; }
+      menu.innerHTML = PROMPT_TEMPLATES.map((tpl) => `
+        <button type="button" onclick="applyPromptTemplate('${tpl.id}')" class="w-full text-left px-3 py-2 rounded-lg text-sm text-zinc-200 hover:bg-zinc-800 transition-colors">
+          <div class="font-medium">${escapeHtml(templateLabel(tpl.id))}</div>
+          <div class="text-[11px] text-zinc-500 truncate">${escapeHtml(tpl.size)} · ${escapeHtml(tpl.quality)}</div>
+        </button>`).join('');
+      menu.classList.remove('hidden');
+      setTimeout(() => {
+        const onDoc = (e) => {
+          if (!menu.contains(e.target) && e.target.id !== 'templateMenuBtn' && !document.getElementById('templateMenuBtn').contains(e.target)) {
+            menu.classList.add('hidden');
+            document.removeEventListener('click', onDoc, true);
+          }
+        };
+        document.addEventListener('click', onDoc, true);
+      }, 0);
+    }
+
+    function applyPromptTemplate(id) {
+      const tpl = PROMPT_TEMPLATES.find((x) => x.id === id);
+      if (!tpl) return;
+      const promptEl = document.getElementById('promptInput');
+      const text = currentLang === 'en' ? tpl.en : tpl.zh;
+      promptEl.value = text;
+      updatePromptLen();
+      try {
+        const placeholderRe = currentLang === 'en' ? /\{subject\}/i : /\{主题\}/;
+        const match = placeholderRe.exec(text);
+        if (match) {
+          promptEl.focus();
+          promptEl.setSelectionRange(match.index, match.index + match[0].length);
+        }
+      } catch {}
+      try { applyTemplateSizeQuality(tpl); } catch {}
+      const menu = document.getElementById('templateMenu');
+      if (menu) menu.classList.add('hidden');
+      lastTemplateId = id;
+      showToast(t('prompt.templates.applied', { name: templateLabel(id) }), 'success');
+    }
+
+    function applyTemplateSizeQuality(tpl) {
+      if (isResponsesApiSelected()) return;
+      try {
+        const m = /^(\d+)x(\d+)$/i.exec(tpl.size);
+        if (m) {
+          sizeState = { mode: 'custom', base: '1K', ratio: '1:1', customWidth: m[1], customHeight: m[2] };
+          stagedSizeState = cloneSizeState(sizeState);
+          const sizeSelect = document.getElementById('sizeSelect');
+          if (sizeSelect) sizeSelect.value = `${m[1]}x${m[2]}`;
+          renderSizeButton();
+        }
+      } catch {}
+      const qSelect = document.getElementById('qualitySelect');
+      if (qSelect && tpl.quality) qSelect.value = tpl.quality;
+    }
+    let lastTemplateId = '';
+
+    // ===== Prompt helper =====
+    function openPromptHelper() {
+      const modal = document.getElementById('promptHelperModal');
+      const input = document.getElementById('promptHelperInput');
+      const output = document.getElementById('promptHelperOutput');
+      const hint = document.getElementById('promptHelperHint');
+      const seed = document.getElementById('promptInput').value.trim();
+      if (seed) input.value = seed;
+      output.value = '';
+      hint.textContent = '';
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      setTimeout(() => input.focus(), 30);
+    }
+    function closePromptHelper() {
+      document.getElementById('promptHelperModal').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+    async function runPromptHelper() {
+      const btn = document.getElementById('promptHelperRunBtn');
+      const input = document.getElementById('promptHelperInput');
+      const output = document.getElementById('promptHelperOutput');
+      const hint = document.getElementById('promptHelperHint');
+      const text = input.value.trim();
+      if (!text) { showToast(t('prompt.helper.errEmpty'), 'error'); return; }
+      btn.disabled = true;
+      hint.textContent = t('prompt.helper.running');
+      try {
+        const ctx = {
+          size: document.getElementById('sizeSelect').value,
+          quality: document.getElementById('qualitySelect').value,
+          output_format: document.getElementById('formatSelect').value,
+          api_path: getActiveApiPreset()?.api_path || '/v1/images/generations',
+          has_reference: referenceImages.length > 0,
+          has_mask: !!referenceMaskDataUrl,
+          template: lastTemplateId,
+        };
+        const body = { text, context: ctx, lang: currentLang };
+        if (activeTurnstile.enabled && !isAdmin) {
+          const tk = getTurnstileToken();
+          if (tk) body.turnstile_token = tk;
+        }
+        const data = await apiFetch('/api/prompt/refine', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }, 'prompt refine');
+        if (!data || typeof data.prompt !== 'string') throw new Error(t('prompt.helper.errEmpty'));
+        output.value = data.prompt;
+        hint.textContent = t('prompt.helper.done');
+      } catch (e) {
+        hint.textContent = '';
+        showToast((e?.message) || t('prompt.helper.errFail'), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    function applyPromptHelperOutput() {
+      const out = document.getElementById('promptHelperOutput').value.trim();
+      if (!out) { showToast(t('prompt.helper.errNoOutput'), 'error'); return; }
+      document.getElementById('promptInput').value = out;
+      updatePromptLen();
+      closePromptHelper();
+      showToast(t('prompt.helper.applied'), 'success');
+    }
+    async function copyPromptHelperOutput() {
+      const out = document.getElementById('promptHelperOutput').value.trim();
+      if (!out) return;
+      try {
+        await navigator.clipboard.writeText(out);
+        showToast(t('common.copied'), 'success');
+      } catch {
+        showToast(t('common.copyFail'), 'error');
+      }
+    }
+
+    // ===== Mask editor =====
+    const maskState = { tool: 'paint', brush: 40, drawing: false, last: null, baseW: 0, baseH: 0 };
+
+    function openMaskEditor() {
+      if (referenceImages.length === 0) { showToast(t('mask.needRef'), 'error'); return; }
+      const modal = document.getElementById('maskModal');
+      const baseImg = document.getElementById('maskBaseImg');
+      const removeBtn = document.getElementById('maskRemoveBtn');
+      removeBtn.classList.toggle('hidden', !referenceMaskDataUrl);
+      baseImg.onload = () => {
+        const canvas = document.getElementById('maskCanvas');
+        const dispW = baseImg.clientWidth;
+        const dispH = baseImg.clientHeight;
+        const naturalW = baseImg.naturalWidth || dispW;
+        const naturalH = baseImg.naturalHeight || dispH;
+        const cap = 1024;
+        const scale = Math.min(1, cap / Math.max(naturalW, naturalH));
+        const internalW = Math.max(1, Math.round(naturalW * scale));
+        const internalH = Math.max(1, Math.round(naturalH * scale));
+        canvas.width = internalW;
+        canvas.height = internalH;
+        canvas.style.width = dispW + 'px';
+        canvas.style.height = dispH + 'px';
+        maskState.baseW = naturalW;
+        maskState.baseH = naturalH;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (referenceMaskDataUrl) {
+          const restoreImg = new Image();
+          restoreImg.onload = () => {
+            ctx.globalAlpha = 0.6;
+            ctx.drawImage(restoreImg, 0, 0, canvas.width, canvas.height);
+            ctx.globalAlpha = 1;
+          };
+          restoreImg.src = referenceMaskDataUrl;
+        }
+        renderMaskStatus();
+      };
+      baseImg.src = referenceImages[0].dataUrl;
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      setMaskTool('paint');
+      const sizeInput = document.getElementById('maskBrushSize');
+      sizeInput.value = String(maskState.brush);
+      document.getElementById('maskBrushSizeLabel').textContent = String(maskState.brush);
+      sizeInput.oninput = () => {
+        maskState.brush = Math.max(2, Math.min(200, parseInt(sizeInput.value, 10) || 40));
+        document.getElementById('maskBrushSizeLabel').textContent = String(maskState.brush);
+      };
+      attachMaskCanvasEvents();
+    }
+    function closeMaskEditor() {
+      document.getElementById('maskModal').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+    function setMaskTool(tool) {
+      maskState.tool = tool === 'erase' ? 'erase' : 'paint';
+      const paintBtn = document.getElementById('maskToolPaint');
+      const eraseBtn = document.getElementById('maskToolErase');
+      const active = 'bg-emerald-600/20 text-emerald-300';
+      const idle = 'text-zinc-300 hover:bg-zinc-800';
+      if (paintBtn && eraseBtn) {
+        paintBtn.className = 'px-2.5 py-1 text-xs font-medium ' + (maskState.tool === 'paint' ? active : idle);
+        eraseBtn.className = 'px-2.5 py-1 text-xs font-medium ' + (maskState.tool === 'erase' ? active : idle);
+      }
+    }
+    function clearMaskCanvas() {
+      const canvas = document.getElementById('maskCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      renderMaskStatus();
+    }
+    function renderMaskStatus() {
+      const status = document.getElementById('maskStatus');
+      if (!status) return;
+      const canvas = document.getElementById('maskCanvas');
+      if (!canvas.width) { status.textContent = ''; return; }
+      const ctx = canvas.getContext('2d');
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let painted = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 0) painted++;
+      const total = canvas.width * canvas.height;
+      const pct = total > 0 ? (painted * 100 / total) : 0;
+      status.textContent = t('mask.coverage', { pct: pct.toFixed(1) });
+    }
+    function maskCanvasPos(canvas, evt) {
+      const rect = canvas.getBoundingClientRect();
+      const x = (evt.clientX - rect.left) * canvas.width / rect.width;
+      const y = (evt.clientY - rect.top) * canvas.height / rect.height;
+      return { x, y };
+    }
+    let maskEventsAttached = false;
+    function attachMaskCanvasEvents() {
+      if (maskEventsAttached) return;
+      maskEventsAttached = true;
+      const canvas = document.getElementById('maskCanvas');
+      const drawTo = (pt) => {
+        const ctx = canvas.getContext('2d');
+        const rectScale = canvas.width / canvas.getBoundingClientRect().width;
+        const radius = Math.max(1, (maskState.brush * rectScale) / 2);
+        ctx.lineWidth = radius * 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        if (maskState.tool === 'erase') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.strokeStyle = 'rgba(0,0,0,1)';
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        }
+        if (maskState.last) {
+          ctx.beginPath();
+          ctx.moveTo(maskState.last.x, maskState.last.y);
+          ctx.lineTo(pt.x, pt.y);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.fill();
+        }
+        maskState.last = pt;
+      };
+      canvas.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        canvas.setPointerCapture?.(e.pointerId);
+        maskState.drawing = true;
+        maskState.last = null;
+        drawTo(maskCanvasPos(canvas, e));
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!maskState.drawing) return;
+        e.preventDefault();
+        drawTo(maskCanvasPos(canvas, e));
+      });
+      const stop = (e) => {
+        if (!maskState.drawing) return;
+        maskState.drawing = false;
+        maskState.last = null;
+        renderMaskStatus();
+      };
+      canvas.addEventListener('pointerup', stop);
+      canvas.addEventListener('pointercancel', stop);
+      canvas.addEventListener('pointerleave', stop);
+    }
+    async function applyMaskEditor() {
+      const canvas = document.getElementById('maskCanvas');
+      if (!canvas.width || !canvas.height) { closeMaskEditor(); return; }
+      const ctx = canvas.getContext('2d');
+      const src = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let painted = 0;
+      for (let i = 3; i < src.data.length; i += 4) if (src.data[i] > 0) painted++;
+      if (painted === 0) {
+        if (referenceMaskDataUrl) {
+          referenceMaskDataUrl = null;
+          renderReferencePreviews();
+          showToast(t('mask.removed'), 'success');
+        }
+        closeMaskEditor();
+        return;
+      }
+      const out = document.createElement('canvas');
+      out.width = canvas.width;
+      out.height = canvas.height;
+      const outCtx = out.getContext('2d');
+      const outImg = outCtx.createImageData(out.width, out.height);
+      for (let i = 0; i < src.data.length; i += 4) {
+        const a = src.data[i + 3];
+        const v = a > 0 ? 255 : 0;
+        outImg.data[i] = v;
+        outImg.data[i + 1] = v;
+        outImg.data[i + 2] = v;
+        outImg.data[i + 3] = 255;
+      }
+      outCtx.putImageData(outImg, 0, 0);
+      referenceMaskDataUrl = out.toDataURL('image/png');
+      renderReferencePreviews();
+      closeMaskEditor();
+      showToast(t('mask.saved'), 'success');
+    }
+    function removeMask() {
+      referenceMaskDataUrl = null;
+      renderReferencePreviews();
+      closeMaskEditor();
+      showToast(t('mask.removed'), 'success');
+    }
+
+    // ===== Test connection =====
+    async function runApiTest(mode) {
+      const apiUrl = document.getElementById('settingsApiUrl').value.trim();
+      const apiKeyRaw = document.getElementById('settingsApiKey').value.trim();
+      if (!apiUrl) { showToast(t('settings.errApiUrl'), 'error'); return; }
+      const resultEl = document.getElementById('settingsTestResult');
+      resultEl.textContent = t('settings.test.running');
+      resultEl.className = 'mt-2 text-xs text-zinc-400';
+      const body = { mode };
+      if (apiUrl) body.api_url = apiUrl;
+      if (apiKeyRaw && apiKeyRaw !== MASKED_API_KEY_VALUE) body.api_key = apiKeyRaw;
+      if (mode === 'image') body.model = document.getElementById('modelSelect')?.value || 'gpt-image-2';
+      try {
+        const data = await apiFetch('/api/admin/test-api', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }, 'api test');
+        if (data.status === 'ok') {
+          resultEl.className = 'mt-2 text-xs text-emerald-400';
+          if (mode === 'models') {
+            resultEl.textContent = t('settings.test.modelsOk', { count: data.model_count, ms: data.elapsed_ms, sample: (data.sample || []).slice(0, 4).join(', ') });
+          } else {
+            resultEl.textContent = t('settings.test.imageOk', { ms: data.elapsed_ms });
+          }
+        } else if (data.status === 'warn') {
+          resultEl.className = 'mt-2 text-xs text-amber-400';
+          resultEl.textContent = t('settings.test.imageWarn', { ms: data.elapsed_ms });
+        } else {
+          resultEl.className = 'mt-2 text-xs text-red-400';
+          const httpPart = data.http_status ? ` (HTTP ${data.http_status})` : '';
+          resultEl.textContent = `${t('settings.test.fail')}${httpPart}: ${data.detail || ''}`;
+        }
+      } catch (e) {
+        resultEl.className = 'mt-2 text-xs text-red-400';
+        resultEl.textContent = `${t('settings.test.fail')}: ${e?.message || e}`;
+      }
     }
   </script>
 </body>

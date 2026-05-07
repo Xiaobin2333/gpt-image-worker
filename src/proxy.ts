@@ -266,6 +266,12 @@ async function callImagesEdits(
     const ext = (parsed.mediaType.split("/")[1] ?? "png").toLowerCase();
     form.append("image[]", blob, `reference-${i}.${ext}`);
   }
+  if (payload.mask) {
+    const maskParsed = parseDataUrl(payload.mask);
+    const maskBlob = new Blob([maskParsed.bytes], { type: maskParsed.mediaType });
+    const maskExt = (maskParsed.mediaType.split("/")[1] ?? "png").toLowerCase();
+    form.append("mask", maskBlob, `mask.${maskExt}`);
+  }
   const editsUrl = `${apiUrl}/v1/images/edits`;
   try {
     return await fetch(editsUrl, {

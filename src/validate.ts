@@ -106,6 +106,21 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
     reference_images = candidates.length === 0 ? undefined : candidates;
   }
 
+  let mask: string | undefined;
+  if (typeof raw.mask === "string" && raw.mask.length > 0) {
+    if (!reference_images || reference_images.length === 0) {
+      throw new ValidationError("mask requires at least one reference image");
+    }
+    if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(raw.mask)) {
+      throw new ValidationError("mask must be an image data URL");
+    }
+    const perImageMaxChars = Math.ceil(limits.referenceMaxBytes * 4 / 3) + 64;
+    if (raw.mask.length > perImageMaxChars) {
+      throw new ValidationError(`mask exceeds ${Math.round(limits.referenceMaxBytes / (1024 * 1024))}MB`);
+    }
+    mask = raw.mask;
+  }
+
   const is_public = raw.is_public === undefined ? true : Boolean(raw.is_public);
 
   return {
@@ -118,6 +133,7 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
     output_compression,
     response_format,
     reference_images,
+    mask,
     is_public,
   };
 }

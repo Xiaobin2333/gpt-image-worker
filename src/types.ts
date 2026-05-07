@@ -41,6 +41,7 @@ export interface GenerateRequestBody {
   output_compression?: number | null;
   response_format?: ResponseFormat;
   reference_images?: string[];
+  mask?: string;
   is_public?: boolean;
 }
 
