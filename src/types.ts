@@ -117,6 +117,7 @@ export interface GenerateJobSnapshot {
   api_preset_name: string;
   max_file_size_mb: number;
   r2_public_domain: string;
+  responses_concurrency?: number;
 }
 
 export interface GenerateJobInput {

@@ -401,6 +401,7 @@ app.post("/api/admin/limits", async (c) => {
     generation_max_n: unknown;
     max_file_size_mb: unknown;
     responses_model: unknown;
+    responses_concurrency: unknown;
     access_session_minutes: unknown;
     admin_session_minutes: unknown;
   }>;
@@ -417,6 +418,7 @@ app.post("/api/admin/limits", async (c) => {
   if (typeof body.generation_max_n === "number") patch.generation_max_n = body.generation_max_n;
   if (typeof body.max_file_size_mb === "number") patch.max_file_size_mb = body.max_file_size_mb;
   if (typeof body.responses_model === "string") patch.responses_model = body.responses_model;
+  if (typeof body.responses_concurrency === "number") patch.responses_concurrency = body.responses_concurrency;
   if (typeof body.access_session_minutes === "number") patch.access_session_minutes = body.access_session_minutes;
   if (typeof body.admin_session_minutes === "number") patch.admin_session_minutes = body.admin_session_minutes;
   const next = await saveRuntimeLimits(c.env, patch);
@@ -582,11 +584,17 @@ type JobRunContext = {
   api_preset_name: string;
   max_file_size_mb: number;
   r2_public_domain: string;
+  responses_concurrency: number;
 };
 
 async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
-  if (input?.snapshot) return { ...input.snapshot };
   const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
+  if (input?.snapshot) {
+    return {
+      ...input.snapshot,
+      responses_concurrency: input.snapshot.responses_concurrency ?? limits.responses_concurrency,
+    };
+  }
   const active = getActivePresetFromState(apiState);
   return {
     api_url: active.api_url,
@@ -595,6 +603,7 @@ async function resolveJobContext(env: Bindings, input: GenerateJobInput | null):
     api_preset_name: active.name || "",
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
+    responses_concurrency: limits.responses_concurrency,
   };
 }
 
@@ -670,6 +679,7 @@ app.post("/api/generate", async (c) => {
     api_preset_name: activePreset.name || "",
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
+    responses_concurrency: limits.responses_concurrency,
   };
   await saveJob(c.env, initial, { payload, owner_id: owner, snapshot });
 
@@ -821,6 +831,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
               existingEntries,
               maxFileSizeMb: ctx.max_file_size_mb,
               apiPresetName: ctx.api_preset_name || undefined,
+              responsesConcurrency: ctx.responses_concurrency,
             },
           );
           if (entries.length === 0) throw new Error("No images returned by upstream");
@@ -1064,6 +1075,7 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
         existingEntries,
         maxFileSizeMb: ctx.max_file_size_mb,
         apiPresetName: ctx.api_preset_name || undefined,
+        responsesConcurrency: ctx.responses_concurrency,
       },
     );
     if (entries.length === 0) throw new Error("No images returned by upstream");

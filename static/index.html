@@ -768,6 +768,13 @@
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
+                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.responsesConcurrency">/v1/responses 并发</label>
+                <input type="number" id="settingsResponsesConcurrency" min="1" max="10" step="1" class="settings-input">
+                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.responsesConcurrency">范围 1 – 10，默认 3。仅 /v1/responses 拆分多次并发时生效</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
                 <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.accessSessionMinutes">访问会话时长 (分钟)</label>
                 <input type="number" id="settingsAccessSessionMin" min="5" max="10080" step="5" class="settings-input">
                 <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.sessionMinutes">范围 5 – 10080（最长 7 天）</p>
@@ -1309,6 +1316,8 @@
         'settings.referenceMaxMb': '单张参考图最大 (MB)',
         'settings.maxFileSizeMb': '单张生成图最大 (MB)',
         'settings.responsesModel': '/v1/responses 模型',
+        'settings.responsesConcurrency': '/v1/responses 并发',
+        'settings.range.responsesConcurrency': '范围 1 – 10，默认 3。仅 /v1/responses 拆分多次并发时生效',
         'settings.accessSessionMinutes': '访问会话时长 (分钟)',
         'settings.adminSessionMinutes': '管理员会话时长 (分钟)',
         'settings.limitsHint': '超出范围会自动夹取到合法区间；保存后立即对前后端生效。',
@@ -1594,6 +1603,8 @@
         'settings.referenceMaxMb': 'Reference image max (MB)',
         'settings.maxFileSizeMb': 'Generated image max (MB)',
         'settings.responsesModel': '/v1/responses model',
+        'settings.responsesConcurrency': '/v1/responses concurrency',
+        'settings.range.responsesConcurrency': 'Range 1 – 10, default 3. Applies only when /v1/responses splits a batch into parallel calls',
         'settings.accessSessionMinutes': 'Access session (minutes)',
         'settings.adminSessionMinutes': 'Admin session (minutes)',
         'settings.limitsHint': 'Out-of-range values are clamped automatically; saved values take effect immediately on both client and server.',
@@ -2532,6 +2543,7 @@
           document.getElementById('settingsReferenceMaxMb').value = lim.value.reference_max_mb ?? 4;
           document.getElementById('settingsMaxFileSizeMb').value = lim.value.max_file_size_mb ?? 50;
           document.getElementById('settingsResponsesModel').value = lim.value.responses_model || '';
+          document.getElementById('settingsResponsesConcurrency').value = lim.value.responses_concurrency ?? 3;
           document.getElementById('settingsAccessSessionMin').value = lim.value.access_session_minutes ?? 180;
           document.getElementById('settingsAdminSessionMin').value = lim.value.admin_session_minutes ?? 180;
         }
@@ -2622,6 +2634,7 @@
       const limRefMb = clampSetting('settingsReferenceMaxMb', 1, 50, 4);
       const limMaxFile = clampSetting('settingsMaxFileSizeMb', 1, 100, 50);
       const limResponsesModel = document.getElementById('settingsResponsesModel').value.trim();
+      const limResponsesConcurrency = clampSetting('settingsResponsesConcurrency', 1, 10, 3);
       const limAccessMin = clampSetting('settingsAccessSessionMin', 5, 10080, 180);
       const limAdminMin = clampSetting('settingsAdminSessionMin', 5, 10080, 180);
       if (clampedAny) showToast(t('settings.clamped'), 'success');
@@ -2691,6 +2704,7 @@
             reference_max_mb: limRefMb,
             max_file_size_mb: limMaxFile,
             responses_model: limResponsesModel,
+            responses_concurrency: limResponsesConcurrency,
             access_session_minutes: limAccessMin,
             admin_session_minutes: limAdminMin,
           }),

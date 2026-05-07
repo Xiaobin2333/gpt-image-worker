@@ -44,6 +44,7 @@ export interface RuntimeLimits {
   generation_max_n: number;
   max_file_size_mb: number;
   responses_model: string;
+  responses_concurrency: number;
   access_session_minutes: number;
   admin_session_minutes: number;
 }
@@ -56,6 +57,7 @@ export const LIMITS_BOUNDS = {
   reference_max_mb: { min: 1, max: 50, default: 4 },
   generation_max_n: { min: 1, max: 20, default: 10 },
   max_file_size_mb: { min: 1, max: 100, default: 50 },
+  responses_concurrency: { min: 1, max: 10, default: 3 },
   access_session_minutes: { min: 5, max: 10_080, default: 180 },
   admin_session_minutes: { min: 5, max: 10_080, default: 180 },
 } as const;
@@ -361,6 +363,12 @@ export async function loadRuntimeLimits(env: Bindings): Promise<RuntimeLimits> {
     responses_model: typeof stored?.responses_model === "string" && stored.responses_model.trim()
       ? stored.responses_model.trim()
       : seedResponses,
+    responses_concurrency: clampInt(
+      stored?.responses_concurrency,
+      LIMITS_BOUNDS.responses_concurrency.default,
+      LIMITS_BOUNDS.responses_concurrency.min,
+      LIMITS_BOUNDS.responses_concurrency.max,
+    ),
     access_session_minutes: clampInt(
       stored?.access_session_minutes,
       Number.isFinite(seedAccessMin) && seedAccessMin > 0 ? seedAccessMin : LIMITS_BOUNDS.access_session_minutes.default,
@@ -428,6 +436,14 @@ export async function saveRuntimeLimits(
     responses_model: typeof patch.responses_model === "string"
       ? patch.responses_model.trim() || current.responses_model
       : current.responses_model,
+    responses_concurrency: patch.responses_concurrency === undefined
+      ? current.responses_concurrency
+      : clampInt(
+          patch.responses_concurrency,
+          current.responses_concurrency,
+          LIMITS_BOUNDS.responses_concurrency.min,
+          LIMITS_BOUNDS.responses_concurrency.max,
+        ),
     access_session_minutes: patch.access_session_minutes === undefined
       ? current.access_session_minutes
       : clampInt(

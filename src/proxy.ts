@@ -315,6 +315,7 @@ export interface CallImageGenerationOptions {
   existingEntries?: GalleryEntry[];
   maxFileSizeMb?: number;
   apiPresetName?: string;
+  responsesConcurrency?: number;
 }
 
 export async function callImageGeneration(
@@ -437,7 +438,8 @@ export async function callImageGeneration(
 
   if (apiPath === "/v1/responses") {
     const remaining = targetCount - entries.length;
-    const concurrency = Math.min(remaining, 3);
+    const cap = Math.max(1, Math.min(10, Math.floor(options.responsesConcurrency ?? 3)));
+    const concurrency = Math.min(remaining, cap);
     const queue = Array.from({ length: remaining }, (_, i) => i);
     let attempt = 0;
     const workers = Array.from({ length: concurrency }, async () => {
