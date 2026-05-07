@@ -43,3 +43,7 @@ MAX_FILE_SIZE_MB = "50"
 # directly from R2 (bypassing the Worker for huge bandwidth savings on the free
 # plan). Leave empty to always serve images through the Worker.
 R2_PUBLIC_DOMAIN = ""
+# Optional: GitHub repo (owner/name) used by the in-app version badge to query
+# the latest release. Defaults to this fork; set to empty string to disable
+# remote version checks.
+GITHUB_REPO = "Xiaobin2333/gpt-image-worker"

@@ -18,6 +18,7 @@ export interface Bindings {
   TRUST_PROXY_HEADERS: string;
   MAX_FILE_SIZE_MB: string;
   R2_PUBLIC_DOMAIN: string;
+  GITHUB_REPO?: string;
 }
 
 export type ApiPath = "/v1/images/generations" | "/v1/responses";

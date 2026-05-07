@@ -12,6 +12,7 @@ import {
 } from "./auth";
 import { callImageGeneration } from "./proxy";
 import {
+  cancelGenerateJob,
   deleteAllGallery,
   deleteGalleryEntry,
   getEntry,
@@ -20,6 +21,7 @@ import {
   getImage,
   getJob,
   getPendingJobInput,
+  listActiveJobs,
   listPendingJobIds,
   listProducedEntries,
   pruneOldJobs,
@@ -88,9 +90,12 @@ app.use("*", async (c, next) => {
   return next();
 });
 
+const APP_VERSION = "v1.1.0";
+
 function isPublicPath(path: string): boolean {
   if (path === "/health") return true;
   if (path === "/api/session" || path === "/api/access") return true;
+  if (path === "/api/version") return true;
   if (path === "/api/admin/login" || path === "/api/admin/logout") return true;
   return !path.startsWith("/api/");
 }
@@ -173,6 +178,13 @@ app.onError((err, c) => {
 app.get("/health", (c) =>
   c.json({ status: "ok", time: new Date().toISOString() }),
 );
+
+app.get("/api/version", (c) => {
+  const repo = (c.env.GITHUB_REPO ?? "").trim();
+  const releaseUrl = repo ? `https://github.com/${repo}/releases/latest` : null;
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json({ version: APP_VERSION, github_repo: repo, release_url: releaseUrl });
+});
 
 function constantTimeEq(a: string, b: string): boolean {
   const ea = new TextEncoder().encode(a);
@@ -662,6 +674,51 @@ app.post("/api/generate", async (c) => {
   await saveJob(c.env, initial, { payload, owner_id: owner, snapshot });
 
   return c.json({ job_id: jobId, status: "queued" }, 202);
+});
+
+app.get("/api/generate/jobs", async (c) => {
+  const admin = await isAdminRequest(c);
+  const owner = getOwnerId(c);
+  if (!admin && !owner) {
+    c.header("Cache-Control", "no-store");
+    return c.json([]);
+  }
+  const jobs = await listActiveJobs(c.env, admin ? undefined : owner);
+  const items = jobs.map((job) => {
+    const payload = job.payload?.payload;
+    return {
+      job_id: job.id,
+      status: job.status,
+      stage: job.status,
+      message: job.status === "queued" ? "Queued" : "Running",
+      operation: "generation",
+      prompt: job.prompt,
+      size: payload?.size,
+      model: payload?.model,
+      quality: payload?.quality,
+      output_format: payload?.output_format,
+      output_compression: payload?.output_compression ?? null,
+      response_format: payload?.response_format,
+      n: payload?.n,
+      api_path: job.payload?.snapshot?.api_path,
+      api_preset_name: job.payload?.snapshot?.api_preset_name || undefined,
+      created_at: job.created_at,
+      updated_at: job.updated_at,
+    };
+  });
+  c.header("Cache-Control", "no-store");
+  return c.json(items);
+});
+
+app.delete("/api/generate/:jobId", async (c) => {
+  const jobId = c.req.param("jobId");
+  const admin = await isAdminRequest(c);
+  const owner = getOwnerId(c);
+  const result = await cancelGenerateJob(c.env, jobId, admin ? undefined : owner);
+  if (result.status === "not_found") return jsonError(404, "Generation job not found");
+  if (result.status === "forbidden") return jsonError(404, "Generation job not found");
+  if (result.status === "already_finished") return jsonError(409, "Generation job already finished");
+  return c.json({ status: "success", message: "Generation job cancelled" });
 });
 
 app.get("/api/generate/:jobId/stream", async (c) => {

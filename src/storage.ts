@@ -12,12 +12,12 @@ export async function saveJob(env: Bindings, job: GenerateJob, input?: GenerateJ
     `INSERT INTO jobs (id, status, created_at, updated_at, prompt, owner_id, payload, result, detail)
      VALUES (?,?,?,?,?,?,?,?,?)
      ON CONFLICT(id) DO UPDATE SET
-       status=excluded.status,
-       updated_at=excluded.updated_at,
+       status=CASE WHEN jobs.status = 'error' AND jobs.detail = 'cancelled' THEN jobs.status ELSE excluded.status END,
+       updated_at=CASE WHEN jobs.status = 'error' AND jobs.detail = 'cancelled' THEN jobs.updated_at ELSE excluded.updated_at END,
        prompt=excluded.prompt,
-       result=COALESCE(excluded.result, jobs.result),
-       detail=COALESCE(excluded.detail, jobs.detail),
-       payload=${payloadExpr}`,
+       result=CASE WHEN jobs.status = 'error' AND jobs.detail = 'cancelled' THEN jobs.result ELSE COALESCE(excluded.result, jobs.result) END,
+       detail=CASE WHEN jobs.status = 'error' AND jobs.detail = 'cancelled' THEN jobs.detail ELSE COALESCE(excluded.detail, jobs.detail) END,
+       payload=CASE WHEN jobs.status = 'error' AND jobs.detail = 'cancelled' THEN NULL ELSE ${payloadExpr} END`,
   )
     .bind(job.id, job.status, job.created_at, job.updated_at, job.prompt, job.owner_id ?? null, payload, result, job.detail ?? null)
     .run();
@@ -128,6 +128,79 @@ export async function tryClaimJob(env: Bindings, jobId: string): Promise<Generat
 export async function pruneOldJobs(env: Bindings): Promise<void> {
   const cutoff = new Date(Date.now() - JOB_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
   await env.DB.prepare(`DELETE FROM jobs WHERE created_at < ?`).bind(cutoff).run();
+}
+
+export interface ActiveJob {
+  id: string;
+  status: "queued" | "running";
+  created_at: string;
+  updated_at: string;
+  prompt: string;
+  owner_id?: string;
+  payload: GenerateJobInput | null;
+}
+
+export async function listActiveJobs(env: Bindings, ownerId?: string): Promise<ActiveJob[]> {
+  const params: unknown[] = [];
+  let where = `status IN ('queued', 'running')`;
+  if (ownerId !== undefined) {
+    where += ` AND owner_id = ?`;
+    params.push(ownerId);
+  }
+  const rs = await env.DB.prepare(
+    `SELECT id, status, created_at, updated_at, prompt, owner_id, payload
+       FROM jobs
+       WHERE ${where}
+       ORDER BY created_at DESC
+       LIMIT 100`,
+  )
+    .bind(...params)
+    .all();
+  return (rs.results ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    let payload: GenerateJobInput | null = null;
+    if (row.payload) {
+      try {
+        payload = JSON.parse(String(row.payload)) as GenerateJobInput;
+      } catch {}
+    }
+    return {
+      id: String(row.id),
+      status: String(row.status) as "queued" | "running",
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+      prompt: String(row.prompt),
+      owner_id: row.owner_id ? String(row.owner_id) : undefined,
+      payload,
+    };
+  });
+}
+
+export async function cancelGenerateJob(
+  env: Bindings,
+  id: string,
+  ownerId?: string,
+): Promise<{ status: "cancelled" | "not_found" | "already_finished" | "forbidden"; job?: GenerateJob }> {
+  const job = await getJob(env, id);
+  if (!job) return { status: "not_found" };
+  if (job.status === "success" || job.status === "error") {
+    return { status: "already_finished", job };
+  }
+  if (ownerId !== undefined && job.owner_id && job.owner_id !== ownerId) {
+    return { status: "forbidden" };
+  }
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE jobs
+       SET status = 'error',
+           detail = 'cancelled',
+           payload = NULL,
+           updated_at = ?
+       WHERE id = ? AND status IN ('queued', 'running')`,
+  )
+    .bind(now, id)
+    .run();
+  return { status: "cancelled", job: { ...job, status: "error", detail: "cancelled", updated_at: now } };
 }
 
 const ORPHAN_GRACE_MS = 10 * 60 * 1000;
