@@ -684,6 +684,16 @@
           <canvas id="maskCanvas" class="absolute inset-0 m-auto cursor-crosshair" style="mix-blend-mode: normal;"></canvas>
           <div id="maskOverlay"></div>
           <div id="maskCursor"></div>
+          <div id="maskLassoActions" class="hidden absolute top-2 right-2 z-20 inline-flex rounded-lg border border-emerald-600/80 bg-zinc-950/90 shadow-lg overflow-hidden backdrop-blur-sm">
+            <button type="button" id="maskLassoFinishBtn" onclick="finishMaskLasso()" disabled
+              class="px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+              <span data-i18n="mask.lassoFinish">完成套索</span>
+              <span id="maskLassoCount" class="font-mono text-zinc-400">(0)</span>
+            </button>
+            <button type="button" onclick="cancelMaskLasso()"
+              class="px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 border-l border-zinc-700" data-i18n="mask.lassoCancel">取消</button>
+          </div>
         </div>
         <div class="flex gap-2 pt-4 mt-3 border-t border-zinc-800">
           <button onclick="closeMaskEditor()" class="flex-1 px-4 py-2.5 rounded-lg border border-zinc-700 text-zinc-300 text-sm font-medium hover:bg-zinc-800 transition-colors" data-i18n="common.cancel">取消</button>
@@ -1742,6 +1752,8 @@
         'mask.size': '画笔粗细',
         'mask.clear': '清空',
         'mask.lassoHint': '点击添加节点，双击或回车闭合',
+        'mask.lassoFinish': '完成套索',
+        'mask.lassoCancel': '取消',
         'mask.apply': '应用蒙版',
         'mask.remove': '移除蒙版',
         'mask.badge': '蒙版',
@@ -2077,6 +2089,8 @@
         'mask.size': 'Brush size',
         'mask.clear': 'Clear',
         'mask.lassoHint': 'Click to add points, double-click or Enter to close',
+        'mask.lassoFinish': 'Finish lasso',
+        'mask.lassoCancel': 'Cancel',
         'mask.apply': 'Apply mask',
         'mask.remove': 'Remove mask',
         'mask.badge': 'Mask',
@@ -3864,8 +3878,8 @@
           ? `<span class="absolute top-0.5 left-0.5 px-1 py-0.5 rounded bg-emerald-600/90 text-[10px] font-medium text-white pointer-events-none">${escapeHtml(t('mask.badge'))}</span>`
           : '';
         const maskBtn = idx === 0
-          ? `<button type="button" onclick="openMaskEditor()" title="${escapeAttribute(t('mask.editTooltip'))}" class="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-zinc-950/80 text-zinc-100 hover:bg-emerald-600 flex items-center justify-center p-0">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;"><path d="M15.232 5.232l3.536 3.536M9 11l3 3L21.5 4.5a2.121 2.121 0 00-3-3L9 11zM3 17v4h4l11-11"/></svg>
+          ? `<button type="button" onclick="openMaskEditor()" title="${escapeAttribute(t('mask.editTooltip'))}" class="absolute bottom-0.5 left-0.5 w-6 h-6 rounded-md bg-zinc-950/85 text-zinc-100 hover:bg-emerald-600 flex items-center justify-center p-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" style="flex:0 0 auto;display:block;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
             </button>`
           : '';
         tile.innerHTML = `
@@ -5355,6 +5369,11 @@
       document.body.style.overflow = '';
       hideMaskOverlay();
       hideMaskCursor();
+      maskState.drawing = false;
+      maskState.shapeStart = null;
+      maskState.lassoPts = [];
+      hideLassoPreview();
+      updateLassoActions();
     }
     function setMaskTool(tool) {
       const allowed = ['brush', 'erase', 'rect', 'ellipse', 'lasso'];
@@ -5368,18 +5387,65 @@
       const sizeWrap = document.getElementById('maskBrushSizeWrap');
       if (sizeWrap) sizeWrap.style.display = showBrushSize ? '' : 'none';
       const canvas = document.getElementById('maskCanvas');
-      if (canvas) {
-        const cursors = { brush: 'crosshair', erase: 'crosshair', rect: 'crosshair', ellipse: 'crosshair', lasso: 'crosshair' };
-        canvas.style.cursor = cursors[maskState.tool] || 'crosshair';
-      }
+      if (canvas) canvas.style.cursor = 'crosshair';
+      maskState.drawing = false;
       maskState.shapeStart = null;
       maskState.lassoPts = [];
       hideMaskOverlay();
+      hideLassoPreview();
+      updateLassoActions();
+    }
+    function hideLassoPreview() {
+      const stage = document.getElementById('maskStage');
+      if (!stage) return;
+      const svg = stage.querySelector('svg.lasso-preview');
+      if (svg) svg.style.display = 'none';
+    }
+    function updateLassoActions() {
+      const wrap = document.getElementById('maskLassoActions');
+      const btn = document.getElementById('maskLassoFinishBtn');
+      const cnt = document.getElementById('maskLassoCount');
+      if (!wrap || !btn || !cnt) return;
+      const active = maskState.tool === 'lasso';
+      wrap.classList.toggle('hidden', !active);
+      const n = maskState.lassoPts.length;
+      cnt.textContent = `(${n})`;
+      btn.disabled = n < 3;
+    }
+    function finishMaskLasso() {
+      if (maskState.tool !== 'lasso' || maskState.lassoPts.length < 3) return;
+      const canvas = document.getElementById('maskCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      const [first, ...rest] = maskState.lassoPts;
+      ctx.moveTo(first.x, first.y);
+      rest.forEach((p) => ctx.lineTo(p.x, p.y));
+      ctx.closePath();
+      ctx.fill();
+      maskState.drawing = false;
+      maskState.lassoPts = [];
+      hideLassoPreview();
+      updateLassoActions();
+      renderMaskStatus();
+    }
+    function cancelMaskLasso() {
+      maskState.drawing = false;
+      maskState.lassoPts = [];
+      hideLassoPreview();
+      updateLassoActions();
     }
     function clearMaskCanvas() {
       const canvas = document.getElementById('maskCanvas');
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      maskState.drawing = false;
+      maskState.shapeStart = null;
+      maskState.lassoPts = [];
+      hideMaskOverlay();
+      hideLassoPreview();
+      updateLassoActions();
       renderMaskStatus();
     }
     function fillMaskCanvas() {
@@ -5513,19 +5579,6 @@
         }
       };
 
-      const finishLasso = () => {
-        if (maskState.lassoPts.length < 3) return;
-        const ctx = canvas.getContext('2d');
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.beginPath();
-        const [first, ...rest] = maskState.lassoPts;
-        ctx.moveTo(first.x, first.y);
-        rest.forEach((p) => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.fill();
-      };
-
       const drawLassoPreviewPath = () => {
         if (maskState.lassoPts.length < 1) { hideMaskOverlay(); return; }
         const stage = document.getElementById('maskStage');
@@ -5555,12 +5608,6 @@
         svg.innerHTML = `<path d="${d}" fill="rgba(16,185,129,0.18)" stroke="rgba(110,231,183,0.95)" stroke-width="1" stroke-dasharray="4,3"/>`;
       };
 
-      const hideLassoPreview = () => {
-        const stage = document.getElementById('maskStage');
-        const svg = stage.querySelector('svg.lasso-preview');
-        if (svg) svg.style.display = 'none';
-      };
-
       canvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         canvas.setPointerCapture?.(e.pointerId);
@@ -5581,6 +5628,7 @@
             maskState.lassoPts.push(cv);
           }
           drawLassoPreviewPath();
+          updateLassoActions();
         }
       });
       canvas.addEventListener('pointermove', (e) => {
@@ -5607,6 +5655,7 @@
           if (!last || Math.hypot(cv.x - last.x, cv.y - last.y) > 4) {
             maskState.lassoPts.push(cv);
             drawLassoPreviewPath();
+            updateLassoActions();
           }
         } else {
           hideMaskCursor();
