@@ -461,14 +461,21 @@ export async function callImageGeneration(
     await Promise.all(workers);
   } else {
     let attempt = 0;
-    const maxAttempts = targetCount + 2;
-    let transientRetries = 0;
-    const maxTransientRetries = 2;
     // Mask + multi-image requests are slow; many upstream gateways hit a ~60s
     // timeout when n>1, returning 502 even though a single-image call would
     // succeed. Force n=1 per call when a mask is present so each call stays
     // under the gateway window.
     const useSingleImagePerCall = !!payload.mask;
+    // Mask edits are flaky on shared upstream gateways: 502s often arrive at
+    // ~50s when the downstream provider is slower than the gateway timeout.
+    // Give them more retries with longer backoff than vanilla generations so
+    // we eventually catch a fast-enough roundtrip.
+    const maxTransientRetries = payload.mask ? 4 : 2;
+    const transientBackoffMs = payload.mask
+      ? [2000, 4000, 8000, 12000]
+      : [800, 1600];
+    const maxAttempts = targetCount + 2 + maxTransientRetries;
+    let transientRetries = 0;
     while (entries.length < targetCount && attempt < maxAttempts) {
       attempt += 1;
       const remaining = targetCount - entries.length;
@@ -482,8 +489,8 @@ export async function callImageGeneration(
         const msg = e instanceof Error ? e.message : String(e);
         const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
         if (transient && transientRetries < maxTransientRetries) {
+          const backoffMs = transientBackoffMs[transientRetries] ?? transientBackoffMs[transientBackoffMs.length - 1];
           transientRetries += 1;
-          const backoffMs = 800 * transientRetries;
           console.warn("upstream transient failure, retrying", { attempt, transientRetries, backoffMs, msg });
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
           continue;
