@@ -153,9 +153,9 @@ export async function getJob(env: Bindings, id: string): Promise<GenerateJob | n
   return rowToJob(row as Record<string, unknown> | null);
 }
 
-export async function appendProducedId(env: Bindings, jobId: string, galleryId: string): Promise<void> {
+export async function appendProducedId(env: Bindings, jobId: string, galleryId: string): Promise<boolean> {
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  const updated = await env.DB.prepare(
     `UPDATE jobs
        SET produced_ids = json(
              CASE
@@ -164,10 +164,12 @@ export async function appendProducedId(env: Bindings, jobId: string, galleryId: 
              END
            ),
            updated_at = ?2
-     WHERE id = ?3`,
+     WHERE id = ?3 AND status = 'running'
+     RETURNING id`,
   )
     .bind(galleryId, now, jobId)
-    .run();
+    .first();
+  return updated !== null;
 }
 
 export async function listProducedEntries(env: Bindings, producedIds: string[]): Promise<GalleryEntry[]> {
@@ -234,6 +236,15 @@ export async function renewJobLease(env: Bindings, jobId: string): Promise<boole
     .bind(now, jobId)
     .first();
   return updated !== null;
+}
+
+export async function isJobRunning(env: Bindings, jobId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT id FROM jobs WHERE id = ? AND status = 'running'`,
+  )
+    .bind(jobId)
+    .first();
+  return row !== null;
 }
 
 export async function pruneOldJobs(env: Bindings): Promise<void> {
@@ -313,17 +324,25 @@ export async function cancelGenerateJob(
     return { status: "forbidden" };
   }
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  const cancelled = await env.DB.prepare(
     `UPDATE jobs
        SET status = 'error',
            detail = 'cancelled',
            payload = NULL,
            updated_at = ?
-       WHERE id = ? AND status IN ('queued', 'running')`,
+       WHERE id = ? AND status IN ('queued', 'running')
+       RETURNING id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids`,
   )
     .bind(now, id)
-    .run();
-  return { status: "cancelled", job: { ...job, status: "error", detail: "cancelled", updated_at: now } };
+    .first();
+  if (cancelled) return { status: "cancelled", job: rowToJob(cancelled as Record<string, unknown>) ?? undefined };
+
+  const current = await getJob(env, id);
+  if (!current) return { status: "not_found" };
+  if (current.status === "success" || current.status === "error") {
+    return { status: "already_finished", job: current };
+  }
+  return { status: "not_found" };
 }
 
 const ORPHAN_GRACE_MS = 10 * 60 * 1000;

@@ -21,6 +21,7 @@ import {
   getImage,
   getJob,
   getPendingJobInput,
+  isJobRunning,
   offloadLargePayloadAssets,
   inflateJobInput,
   deleteJobTmpAssets,
@@ -606,18 +607,25 @@ type JobRunContext = {
 };
 
 const JOB_LEASE_RENEW_MS = 30_000;
+const JOB_CANCEL_CHECK_MS = 3_000;
 
-function startJobLeaseHeartbeat(env: Bindings, jobId: string): () => void {
+function startJobExecutionMonitor(env: Bindings, jobId: string, controller: AbortController): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastLeaseRenewedAt = Date.now();
 
   const schedule = () => {
     timer = setTimeout(async () => {
       if (stopped) return;
       try {
-        const active = await renewJobLease(env, jobId);
+        const shouldRenew = Date.now() - lastLeaseRenewedAt >= JOB_LEASE_RENEW_MS;
+        const active = shouldRenew
+          ? await renewJobLease(env, jobId)
+          : await isJobRunning(env, jobId);
+        if (shouldRenew && active) lastLeaseRenewedAt = Date.now();
         if (!active) {
           stopped = true;
+          controller.abort(new Error("Generation job cancelled"));
           return;
         }
       } catch (err) {
@@ -627,7 +635,7 @@ function startJobLeaseHeartbeat(env: Bindings, jobId: string): () => void {
         });
       }
       if (!stopped) schedule();
-    }, JOB_LEASE_RENEW_MS);
+    }, JOB_CANCEL_CHECK_MS);
   };
 
   schedule();
@@ -846,7 +854,9 @@ app.get("/api/generate/:jobId/stream", async (c) => {
         if (existingEntries.length >= targetN && targetN > 0) {
           const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
           await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-          sendEvent("done", { result });
+          const finished = await getJob(env, jobId);
+          if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
+          else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
           return;
         }
 
@@ -854,7 +864,9 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           if (existingEntries.length > 0) {
             const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
             await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-            sendEvent("done", { result });
+            const finished = await getJob(env, jobId);
+            if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
+            else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
             return;
           }
           await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "Pending input missing" });
@@ -871,7 +883,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         const controller2 = new AbortController();
         const timer = setTimeout(() => controller2.abort(), 5 * 60 * 1000);
-        const stopLeaseHeartbeat = startJobLeaseHeartbeat(env, jobId);
+        const stopExecutionMonitor = startJobExecutionMonitor(env, jobId, controller2);
         const startedAt = Date.now();
         try {
           const entries = await callImageGeneration(
@@ -886,6 +898,9 @@ app.get("/api/generate/:jobId/stream", async (c) => {
               maxFileSizeMb: ctx.max_file_size_mb,
               apiPresetName: ctx.api_preset_name || undefined,
               responsesConcurrency: ctx.responses_concurrency,
+              ensureJobActive: async () => {
+                if (!(await isJobRunning(env, jobId))) throw new Error("Generation job cancelled");
+              },
             },
           );
           if (entries.length === 0) throw new Error("No images returned by upstream");
@@ -897,11 +912,19 @@ app.get("/api/generate/:jobId/stream", async (c) => {
             );
             firstNew.duration = duration;
           }
+          if (!(await isJobRunning(env, jobId))) {
+            sendEvent("error", { detail: "cancelled" });
+            return;
+          }
           const result = buildGenerateResponse(ctx.r2_public_domain, entries);
           await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-          sendEvent("done", { result });
+          const finished = await getJob(env, jobId);
+          if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
+          else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
         } catch (e) {
-          const detail = e instanceof Error ? e.message : String(e);
+          const current = await getJob(env, jobId);
+          const cancelled = current?.status === "error" && current.detail === "cancelled";
+          const detail = cancelled ? "cancelled" : e instanceof Error ? e.message : String(e);
           console.error("stream job failed", {
             jobId,
             detail,
@@ -915,11 +938,13 @@ app.get("/api/generate/:jobId/stream", async (c) => {
             response_format: input.payload.response_format,
             n: input.payload.n,
           });
-          await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
+          if (!cancelled) {
+            await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
+          }
           sendEvent("error", { detail });
         } finally {
           clearTimeout(timer);
-          stopLeaseHeartbeat();
+          stopExecutionMonitor();
           await deleteJobTmpAssets(env, jobId).catch(() => {});
         }
       } finally {
@@ -1305,7 +1330,7 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
-  const stopLeaseHeartbeat = startJobLeaseHeartbeat(env, jobId);
+  const stopExecutionMonitor = startJobExecutionMonitor(env, jobId, controller);
   const startedAt = Date.now();
   try {
     const entries = await callImageGeneration(
@@ -1320,6 +1345,9 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
         maxFileSizeMb: ctx.max_file_size_mb,
         apiPresetName: ctx.api_preset_name || undefined,
         responsesConcurrency: ctx.responses_concurrency,
+        ensureJobActive: async () => {
+          if (!(await isJobRunning(env, jobId))) throw new Error("Generation job cancelled");
+        },
       },
     );
     if (entries.length === 0) throw new Error("No images returned by upstream");
@@ -1331,10 +1359,13 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
       );
       firstNew.duration = duration;
     }
+    if (!(await isJobRunning(env, jobId))) return;
     const result = buildGenerateResponse(ctx.r2_public_domain, entries);
     await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
   } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e);
+    const current = await getJob(env, jobId);
+    const cancelled = current?.status === "error" && current.detail === "cancelled";
+    const detail = cancelled ? "cancelled" : e instanceof Error ? e.message : String(e);
     console.error("cron job failed", {
       jobId,
       detail,
@@ -1348,10 +1379,12 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
       response_format: input.payload.response_format,
       n: input.payload.n,
     });
-    await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
+    if (!cancelled) {
+      await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
+    }
   } finally {
     clearTimeout(timer);
-    stopLeaseHeartbeat();
+    stopExecutionMonitor();
     await deleteJobTmpAssets(env, jobId).catch(() => {});
   }
 }

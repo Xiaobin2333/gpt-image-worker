@@ -1,5 +1,5 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
-import { addToGallery, appendProducedId, generateImageId, saveImage } from "./storage";
+import { addToGallery, appendProducedId, deleteGalleryEntry, deleteImage, generateImageId, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
 
 interface FormatInfo {
@@ -147,6 +147,7 @@ async function fetchImageBytes(
   responsePreview: string,
   apiUrl: string,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   if (image.b64_json) return decodeBase64(image.b64_json);
   if (image.url) {
@@ -164,7 +165,7 @@ async function fetchImageBytes(
 
     let resp: Response;
     try {
-      resp = await fetch(target, { headers });
+      resp = await fetch(target, { headers, signal });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("download fetch failed", { url: target, error: msg });
@@ -322,6 +323,7 @@ export interface CallImageGenerationOptions {
   maxFileSizeMb?: number;
   apiPresetName?: string;
   responsesConcurrency?: number;
+  ensureJobActive?: () => Promise<void>;
 }
 
 export async function callImageGeneration(
@@ -341,6 +343,13 @@ export async function callImageGeneration(
   const entries: GalleryEntry[] = [...(options.existingEntries ?? [])];
   if (entries.length >= targetCount) return entries.slice(0, targetCount);
 
+  const ensureActive = async () => {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("Generation job cancelled");
+    }
+    await options.ensureJobActive?.();
+  };
+
   console.log("generation start", {
     api_url: settings.api_url,
     api_path: apiPath,
@@ -359,13 +368,21 @@ export async function callImageGeneration(
     if (!rec.b64_json && rec.url) {
       console.log("upstream returned image url", { url: rec.url });
     }
-    const bytes = await fetchImageBytes(rec, sourceText, settings.api_url, settings.api_key);
+    await ensureActive();
+    const bytes = await fetchImageBytes(rec, sourceText, settings.api_url, settings.api_key, signal);
+    await ensureActive();
     if (bytes.byteLength > maxBytes) {
       throw new Error(`Image too large: ${bytes.byteLength} bytes (max ${maxBytes})`);
     }
     const id = generateImageId();
     const filename = `${id}.${fmt.extension}`;
     await saveImage(env, filename, bytes, fmt.mediaType);
+    try {
+      await ensureActive();
+    } catch (err) {
+      await deleteImage(env, filename).catch(() => {});
+      throw err;
+    }
     const dims = getImageDimensions(bytes);
     const entry: GalleryEntry = {
       id,
@@ -387,16 +404,21 @@ export async function callImageGeneration(
       has_reference: hasReferences,
       owner_id: ownerId,
     };
-    await addToGallery(env, entry);
-    if (options.jobId) {
-      await appendProducedId(env, options.jobId, id).catch((err) =>
-        console.error("appendProducedId failed", { jobId: options.jobId, id, err: err instanceof Error ? err.message : String(err) }),
-      );
+    try {
+      await addToGallery(env, entry);
+    } catch (err) {
+      await deleteImage(env, filename).catch(() => {});
+      throw err;
+    }
+    if (options.jobId && !(await appendProducedId(env, options.jobId, id))) {
+      await deleteGalleryEntry(env, id).catch(() => {});
+      throw new Error("Generation job cancelled");
     }
     return entry;
   };
 
   const runOneCall = async (perCall: number, attempt: number): Promise<GalleryEntry[]> => {
+    await ensureActive();
     const callPayload: GenerateRequestBody = { ...payload, n: perCall };
     let resp: Response;
     if (apiPath === "/v1/images/generations") {
@@ -420,6 +442,7 @@ export async function callImageGeneration(
     }
 
     const parsed = await readUpstreamJson(resp);
+    await ensureActive();
     if (parsed.status >= 400) throw new Error(upstreamErrorMessage(parsed));
     if (!parsed.json) throw new Error(`Upstream returned non-JSON (${parsed.status}): ${parsed.text.slice(0, 200)}`);
 
@@ -483,6 +506,7 @@ export async function callImageGeneration(
           transientRetries += 1;
           console.warn("upstream transient failure, retrying", { attempt, transientRetries, backoffMs, msg });
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          await ensureActive();
           continue;
         }
         throw e;
