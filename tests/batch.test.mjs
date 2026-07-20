@@ -165,6 +165,11 @@ test("upstream JSON parsing does not depend on the Content-Type header", () => {
   assert.doesNotMatch(proxy, /if \(!ct\.includes\("application\/json"\)\)/);
 });
 
+test("upstream failures log safe response metadata and the effective request path", () => {
+  assert.match(proxy, /function upstreamResponseMetadata[\s\S]*cf-ray[\s\S]*x-oneapi-request-id/);
+  assert.match(proxy, /upstream returned non-success response[\s\S]*request_path:[\s\S]*metadata: parsed\.metadata/);
+});
+
 test("streamed jobs publish each committed image as an SSE image event", () => {
   assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*const firstPublish = !publishedIds\.has\(committedEntry\.id\)[\s\S]*options\.onImage/);
   assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed\) => emitResultImages\(result, completed\)/);

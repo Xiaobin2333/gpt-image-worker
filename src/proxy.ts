@@ -387,12 +387,36 @@ async function callImagesEdits(
   }
 }
 
-async function readUpstreamJson(resp: Response): Promise<{ status: number; json?: Record<string, unknown>; text: string }> {
+interface UpstreamResponseMetadata {
+  server?: string;
+  cfRay?: string;
+  requestId?: string;
+  oneApiRequestId?: string;
+  via?: string;
+}
+
+function upstreamResponseMetadata(resp: Response): UpstreamResponseMetadata {
+  return {
+    server: resp.headers.get("server") || undefined,
+    cfRay: resp.headers.get("cf-ray") || undefined,
+    requestId: resp.headers.get("x-request-id") || undefined,
+    oneApiRequestId: resp.headers.get("x-oneapi-request-id") || undefined,
+    via: resp.headers.get("via") || undefined,
+  };
+}
+
+async function readUpstreamJson(resp: Response): Promise<{
+  status: number;
+  json?: Record<string, unknown>;
+  text: string;
+  metadata: UpstreamResponseMetadata;
+}> {
   const text = await resp.text();
+  const metadata = upstreamResponseMetadata(resp);
   try {
-    return { status: resp.status, json: JSON.parse(text) as Record<string, unknown>, text };
+    return { status: resp.status, json: JSON.parse(text) as Record<string, unknown>, text, metadata };
   } catch {
-    return { status: resp.status, text };
+    return { status: resp.status, text, metadata };
   }
 }
 
@@ -638,6 +662,13 @@ export async function callImageGeneration(
     const parsed = await readUpstreamJson(resp);
     ensureNotAborted();
     if (parsed.status >= 400) {
+      console.error("upstream returned non-success response", {
+        api_path: apiPath,
+        request_path: apiPath === "/v1/images/generations" && hasReferences ? "/v1/images/edits" : apiPath,
+        status: parsed.status,
+        metadata: parsed.metadata,
+        body: parsed.text.slice(0, 300),
+      });
       throw new UpstreamRequestError(parsed.status, upstreamErrorMessage(parsed));
     }
     if (!parsed.json) throw new Error(`Upstream returned non-JSON (${parsed.status}): ${parsed.text.slice(0, 200)}`);
