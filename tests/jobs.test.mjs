@@ -15,10 +15,12 @@ test("only a finalized claim removes temporary job assets", () => {
   assert.doesNotMatch(source, /stopExecutionMonitor\(\);\s*await deleteJobTmpAssets/);
 });
 
-test("an occupied SSE claim closes into polling without a fake terminal error", () => {
-  assert.match(source, /if \(!claimed\) \{\s*sendEvent\("waiting", \{ reason: "another-worker-running" \}\);\s*return;/);
+test("an occupied SSE claim follows produced images until the terminal state", () => {
+  assert.match(source, /const followClaimedJob = async \(reason: string\)[\s\S]*getJob\(env, jobId\)[\s\S]*emitProducedImages\(current\)[\s\S]*current\.status === "success"[\s\S]*sendEvent\("done"/);
+  assert.match(source, /const freshIds = \(current\.produced_ids \?\? \[\]\)\.filter[\s\S]*listProducedEntries\(env, freshIds\)[\s\S]*sendEvent\("image"/);
+  assert.match(source, /if \(!claimed\) \{\s*await followClaimedJob\("another-worker-running"\);\s*return;/);
+  assert.match(source, /else await followClaimedJob\("job-lease-lost"\)/);
   assert.doesNotMatch(source, /Timed out waiting for worker/);
-  assert.doesNotMatch(source, /for \(let i = 0; i < 60/);
 });
 
 test("scheduled cleanup does not share a subrequest budget with active generation", () => {

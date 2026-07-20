@@ -131,7 +131,7 @@ test("upstream JSON parsing does not depend on the Content-Type header", () => {
 test("streamed jobs publish each committed image as an SSE image event", () => {
   assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*options\.onImage\(entry, publishedIds\.size, targetCount\)/);
   assert.match(proxy, /deletePendingImages\(persisted\.results\.filter\(\(entry\) => !publishedIds\.has\(entry\.id\)\)\)/);
-  assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed, total\) => sendEvent\("image", \{ result, completed, total \}\)/);
+  assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed\) => emitResultImages\(result, completed\)/);
 });
 
 test("job image records share one guarded gallery batch", async () => {

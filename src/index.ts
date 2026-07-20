@@ -974,6 +974,53 @@ app.get("/api/generate/:jobId/stream", async (c) => {
         try { send(`: heartbeat\n\n`); } catch { close(); }
       }, 45_000);
 
+      const pendingInput = await getPendingJobInput(env, jobId).catch(() => null);
+      const total = Math.max(1, pendingInput?.payload.n ?? job.result?.n ?? 1);
+      const fallbackLimits = pendingInput?.snapshot?.r2_public_domain
+        ? null
+        : await loadRuntimeLimits(env).catch(() => null);
+      const publicDomain = pendingInput?.snapshot?.r2_public_domain ?? fallbackLimits?.r2_public_domain ?? "";
+      const emittedIds = new Set<string>();
+      const emitResultImages = (result: GenerateResponse, completed?: number) => {
+        const images = Array.isArray(result.images) ? result.images : [];
+        for (const image of images) if (image.id) emittedIds.add(image.id);
+        sendEvent("image", { result, completed: completed ?? emittedIds.size, total });
+      };
+      const emitProducedImages = async (current: GenerateJob) => {
+        const freshIds = (current.produced_ids ?? []).filter((id) => !emittedIds.has(id));
+        if (freshIds.length === 0) return;
+        const entries = await listProducedEntries(env, freshIds);
+        for (const entry of entries) {
+          emittedIds.add(entry.id);
+          sendEvent("image", {
+            result: buildGenerateResponse(publicDomain, [entry]),
+            completed: emittedIds.size,
+            total,
+          });
+        }
+      };
+      const followClaimedJob = async (reason: string) => {
+        sendEvent("waiting", { reason });
+        const deadline = Date.now() + 6 * 60 * 1000;
+        while (!closed && !c.req.raw.signal.aborted && Date.now() < deadline) {
+          const current = await getJob(env, jobId);
+          if (!current) {
+            sendEvent("error", { detail: "Job not found or expired" });
+            return;
+          }
+          await emitProducedImages(current);
+          if (current.status === "success" && current.result) {
+            sendEvent("done", { result: current.result });
+            return;
+          }
+          if (current.status === "error") {
+            sendEvent("error", { detail: current.detail ?? "unknown" });
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+      };
+
       try {
         if (job.status === "success" && job.result) {
           sendEvent("done", { result: job.result });
@@ -986,7 +1033,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         const claimed = await tryClaimJob(env, jobId);
         if (!claimed) {
-          sendEvent("waiting", { reason: "another-worker-running" });
+          await followClaimedJob("another-worker-running");
           return;
         }
         const claimToken = claimed.claim_token;
@@ -1001,11 +1048,11 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           claimed,
           claimToken,
           "stream",
-          (result, completed, total) => sendEvent("image", { result, completed, total }),
+          (result, completed) => emitResultImages(result, completed),
         );
         if (outcome.status === "success") sendEvent("done", { result: outcome.result });
         else if (outcome.status === "error") sendEvent("error", { detail: outcome.detail });
-        else sendEvent("waiting", { reason: "job-lease-lost" });
+        else await followClaimedJob("job-lease-lost");
       } finally {
         clearInterval(heartbeat);
         close();
