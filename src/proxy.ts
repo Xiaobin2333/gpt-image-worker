@@ -1,5 +1,5 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
-import { addGalleryEntriesForJob, addToGallery, deleteImage, deleteImages, generateImageId, saveImage } from "./storage";
+import { addGalleryEntriesForJob, addToGallery, addToGalleryForJob, deleteImage, deleteImages, generateImageId, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
 import { runSettledBatch } from "./batch";
 
@@ -196,7 +196,7 @@ function parseDataUrl(dataUrl: string): DataUrl {
   return { mediaType, base64, bytes: decodeBase64(base64) };
 }
 
-function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<string, unknown> {
+export function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<string, unknown> {
   const data: Record<string, unknown> = {
     model: payload.model,
     prompt: payload.prompt,
@@ -214,8 +214,41 @@ function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<stri
   return data;
 }
 
-function buildResponsesPayload(payload: GenerateRequestBody): Record<string, unknown> {
-  return { prompt: payload.prompt, model: payload.model };
+export function buildResponsesPayload(
+  payload: GenerateRequestBody,
+  responsesModel: string,
+): Record<string, unknown> {
+  const tool: Record<string, unknown> = {
+    type: "image_generation",
+    size: payload.size,
+    quality: payload.quality,
+    output_format: payload.output_format,
+  };
+  if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
+    tool.output_compression = payload.output_compression;
+  }
+  if (payload.mask) {
+    parseDataUrl(payload.mask);
+    tool.input_image_mask = { image_url: payload.mask };
+  }
+  const references = payload.reference_images ?? [];
+  const input = references.length > 0
+    ? [{
+        role: "user",
+        content: [
+          { type: "input_text", text: payload.prompt },
+          ...references.map((imageUrl) => {
+            parseDataUrl(imageUrl);
+            return { type: "input_image", image_url: imageUrl };
+          }),
+        ],
+      }]
+    : payload.prompt;
+  return {
+    model: responsesModel.trim() || payload.model,
+    input,
+    tools: [tool],
+  };
 }
 
 const UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
@@ -333,7 +366,9 @@ export interface CallImageGenerationOptions {
   maxFileSizeMb?: number;
   apiPresetName?: string;
   responsesConcurrency?: number;
+  responsesModel?: string;
   claimToken?: string;
+  onImage?: (entry: GalleryEntry, completed: number, total: number) => void | Promise<void>;
 }
 
 export async function callImageGeneration(
@@ -352,6 +387,7 @@ export async function callImageGeneration(
   const targetCount = Math.max(1, payload.n);
   const entries: GalleryEntry[] = [...(options.existingEntries ?? [])];
   const existingIds = new Set(entries.map((entry) => entry.id));
+  const publishedIds = new Set(existingIds);
   if (entries.length >= targetCount) return entries.slice(0, targetCount);
 
   const ensureNotAborted = () => {
@@ -433,6 +469,26 @@ export async function callImageGeneration(
         await deleteImage(env, filename).catch(() => {});
         throw err;
       }
+    } else if (options.onImage) {
+      if (!options.claimToken) {
+        await deleteImage(env, filename).catch(() => {});
+        throw new Error("Generation claim token missing");
+      }
+      const committed = await addToGalleryForJob(env, entry, options.jobId, options.claimToken);
+      if (!committed) {
+        await deleteImage(env, filename).catch(() => {});
+        throw new Error("Generation job lease lost");
+      }
+      publishedIds.add(entry.id);
+      try {
+        await options.onImage(entry, publishedIds.size, targetCount);
+      } catch (error) {
+        console.error("generation image progress callback failed", {
+          jobId: options.jobId,
+          imageId: entry.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     return entry;
   };
@@ -456,7 +512,7 @@ export async function callImageGeneration(
       resp = await postJson(
         `${settings.api_url}/v1/responses`,
         settings.api_key,
-        buildResponsesPayload(callPayload),
+        buildResponsesPayload(callPayload, options.responsesModel ?? ""),
         signal,
       );
     }
@@ -503,10 +559,7 @@ export async function callImageGeneration(
     return persisted.results;
   };
 
-  if (apiPath === "/v1/responses") {
-    const remaining = targetCount - entries.length;
-    const cap = Math.max(1, Math.min(10, Math.floor(options.responsesConcurrency ?? 3)));
-    const concurrency = Math.min(remaining, cap);
+  const runParallelSingleCalls = async (remaining: number, concurrency: number, label: string) => {
     let fatalError: unknown;
     const batch = await runSettledBatch(remaining, concurrency, async (index) => {
       if (fatalError) throw fatalError;
@@ -522,23 +575,30 @@ export async function callImageGeneration(
         if (entries.length < targetCount) entries.push(entry);
       }
     }
-    if (batch.errors.length > 0) {
-      console.warn("responses batch partially failed", {
-        requested: remaining,
-        succeeded: batch.results.length,
-        failed: batch.errors.length,
-        errors: batch.errors.slice(0, 3).map(({ index, error }) => ({
-          attempt: index + 1,
-          message: error instanceof Error ? error.message : String(error),
-        })),
-      });
-      const fatal = batch.errors.find(({ error }) => isFatalJobError(error));
-      if (fatal) {
-        await deletePendingImages(entries.filter((entry) => !existingIds.has(entry.id)));
-        throw fatal.error;
-      }
-      if (entries.length === 0) throw batch.errors[0]!.error;
+    if (batch.errors.length === 0) return;
+    console.warn(`${label} parallel batch partially failed`, {
+      requested: remaining,
+      succeeded: batch.results.length,
+      failed: batch.errors.length,
+      errors: batch.errors.slice(0, 3).map(({ index, error }) => ({
+        attempt: index + 1,
+        message: error instanceof Error ? error.message : String(error),
+      })),
+    });
+    const fatal = batch.errors.find(({ error }) => isFatalJobError(error));
+    if (fatal) {
+      await deletePendingImages(entries.filter((entry) => !publishedIds.has(entry.id)));
+      throw fatal.error;
     }
+    if (entries.length === 0) throw batch.errors[0]!.error;
+  };
+
+  const parallelImages = apiPath === "/v1/images/generations"
+    && !hasReferences
+    && requiresSingleImageCalls(payload);
+  if (apiPath === "/v1/responses" || parallelImages) {
+    const remaining = targetCount - entries.length;
+    await runParallelSingleCalls(remaining, remaining, apiPath === "/v1/responses" ? "responses" : "images");
   } else {
     let attempt = 0;
     const maxTransientRetries = 2;
@@ -558,17 +618,17 @@ export async function callImageGeneration(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (isFatalJobError(e)) {
-          await deletePendingImages(entries.filter((entry) => !existingIds.has(entry.id)));
+          await deletePendingImages(entries.filter((entry) => !publishedIds.has(entry.id)));
           throw e;
         }
         if (!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter(e)) {
-          useSingleImagePerCall = true;
           console.warn("upstream rejected batch image count, retrying as single-image calls", {
             requested: targetCount,
             failed_attempt: attempt,
             message: msg,
           });
-          continue;
+          await runParallelSingleCalls(remaining, remaining, "images fallback");
+          break;
         }
         const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
         if (transient && transientRetries < maxTransientRetries) {
@@ -603,7 +663,7 @@ export async function callImageGeneration(
   }
 
   if (entries.length === 0) throw new Error("Upstream produced no images");
-  const pendingEntries = entries.filter((entry) => !existingIds.has(entry.id));
+  const pendingEntries = entries.filter((entry) => !publishedIds.has(entry.id));
   if (options.jobId && pendingEntries.length > 0) {
     if (!options.claimToken) {
       await deletePendingImages(pendingEntries);

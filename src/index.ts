@@ -10,7 +10,7 @@ import {
   isUnlocked,
   verifyAccessToken,
 } from "./auth";
-import { callImageGeneration } from "./proxy";
+import { buildImagesGenerationPayload, buildResponsesPayload, callImageGeneration } from "./proxy";
 import {
   cancelGenerateJob,
   deleteAllGallery,
@@ -619,6 +619,7 @@ type JobRunContext = {
   api_preset_name: string;
   max_file_size_mb: number;
   r2_public_domain: string;
+  responses_model: string;
   responses_concurrency: number;
 };
 
@@ -661,10 +662,14 @@ function startJobExecutionMonitor(
 
 async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
   if (input?.snapshot) {
-    const responsesConcurrency = input.snapshot.responses_concurrency
-      ?? (await loadRuntimeLimits(env)).responses_concurrency;
+    const limits = input.snapshot.responses_concurrency === undefined || !input.snapshot.responses_model
+      ? await loadRuntimeLimits(env)
+      : null;
+    const responsesConcurrency = input.snapshot.responses_concurrency ?? limits!.responses_concurrency;
+    const responsesModel = input.snapshot.responses_model || limits!.responses_model;
     return {
       ...input.snapshot,
+      responses_model: responsesModel,
       responses_concurrency: responsesConcurrency,
     };
   }
@@ -677,6 +682,7 @@ async function resolveJobContext(env: Bindings, input: GenerateJobInput | null):
     api_preset_name: active.name || "",
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
+    responses_model: limits.responses_model,
     responses_concurrency: limits.responses_concurrency,
   };
 }
@@ -691,6 +697,7 @@ async function executeClaimedJob(
   claimed: GenerateJob,
   claimToken: string,
   source: "stream" | "cron",
+  onImage?: (result: GenerateResponse, completed: number, total: number) => void | Promise<void>,
 ): Promise<ClaimedJobOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
@@ -719,6 +726,15 @@ async function executeClaimedJob(
     const producedIds = claimed.produced_ids ?? [];
     const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
     const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
+    if (onImage) {
+      for (let i = 0; i < Math.min(existingEntries.length, targetN); i++) {
+        await onImage(
+          buildGenerateResponse(runContext.r2_public_domain, [existingEntries[i]!]),
+          i + 1,
+          targetN,
+        );
+      }
+    }
     if (existingEntries.length >= targetN && targetN > 0) {
       const result = buildGenerateResponse(runContext.r2_public_domain, existingEntries.slice(0, targetN));
       return await finish("success", { result }) ? { status: "success", result } : { status: "lost" };
@@ -751,7 +767,15 @@ async function executeClaimedJob(
         maxFileSizeMb: runContext.max_file_size_mb,
         apiPresetName: runContext.api_preset_name || undefined,
         responsesConcurrency: runContext.responses_concurrency,
+        responsesModel: runContext.responses_model,
         claimToken,
+        onImage: onImage
+          ? (entry, completed, total) => onImage!(
+              buildGenerateResponse(runContext!.r2_public_domain, [entry]),
+              completed,
+              total,
+            )
+          : undefined,
       },
     );
     if (entries.length === 0) throw new Error("No images returned by upstream");
@@ -841,9 +865,6 @@ app.post("/api/generate", async (c) => {
     referenceMaxBytes: limits.reference_max_mb * 1024 * 1024,
     generationMaxN,
   });
-  if (settings.api_path === "/v1/responses" && (payload.reference_images?.length || payload.mask)) {
-    return jsonError(400, "Reference images and masks require the Images API path");
-  }
   const turnstileToken = typeof (raw as { turnstile_token?: unknown })?.turnstile_token === "string"
     ? ((raw as { turnstile_token?: string }).turnstile_token as string).trim()
     : "";
@@ -876,6 +897,7 @@ app.post("/api/generate", async (c) => {
     api_preset_name: activePreset.name || "",
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
+    responses_model: limits.responses_model,
     responses_concurrency: limits.responses_concurrency,
   };
   const persistedInput = await offloadLargePayloadAssets(c.env, jobId, { payload, owner_id: owner, snapshot });
@@ -982,7 +1004,13 @@ app.get("/api/generate/:jobId/stream", async (c) => {
         }
 
         sendEvent("running", { updated_at: claimed.updated_at });
-        const outcome = await executeClaimedJob(env, claimed, claimToken, "stream");
+        const outcome = await executeClaimedJob(
+          env,
+          claimed,
+          claimToken,
+          "stream",
+          (result, completed, total) => sendEvent("image", { result, completed, total }),
+        );
         if (outcome.status === "success") sendEvent("done", { result: outcome.result });
         else if (outcome.status === "error") sendEvent("error", { detail: outcome.detail });
         else sendEvent("waiting", { reason: "job-lease-lost" });
@@ -1325,6 +1353,7 @@ app.post("/api/admin/test-api", async (c) => {
   const active = getActivePresetFromState(apiState);
   const apiUrl = (typeof raw.api_url === "string" && raw.api_url.trim() ? raw.api_url.trim() : active.api_url).replace(/\/+$/, "");
   const apiKey = typeof raw.api_key === "string" && raw.api_key.trim() ? raw.api_key.trim() : active.api_key;
+  const apiPath = normalizeApiPath(typeof raw.api_path === "string" ? raw.api_path : active.api_path);
   const mode = raw.mode === "image" ? "image" : "models";
   if (!apiUrl) return jsonError(400, "API URL not configured");
   if (!apiKey) return jsonError(400, "API Key not configured");
@@ -1355,10 +1384,25 @@ app.post("/api/admin/test-api", async (c) => {
       return c.json({ status: "ok", mode, elapsed_ms: elapsed, http_status: resp.status, model_count: modelCount, sample });
     }
     const model = typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : "gpt-image-2";
-    const resp = await fetch(`${apiUrl}/v1/images/generations`, {
+    const testPayload = {
+      model,
+      prompt: "a single small red dot on white background",
+      size: "1024x1024",
+      n: 1,
+      quality: "low" as const,
+      output_format: "png" as const,
+      response_format: "b64_json" as const,
+    };
+    const limits = apiPath === "/v1/responses" ? await loadRuntimeLimits(c.env) : null;
+    const responsesModel = typeof raw.responses_model === "string" && raw.responses_model.trim()
+      ? raw.responses_model.trim()
+      : limits?.responses_model ?? "";
+    const resp = await fetch(`${apiUrl}${apiPath}`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json", "User-Agent": "gpt-image-worker" },
-      body: JSON.stringify({ model, prompt: "a single small red dot on white background", size: "1024x1024", n: 1, quality: "low" }),
+      body: JSON.stringify(apiPath === "/v1/responses"
+        ? buildResponsesPayload(testPayload, responsesModel)
+        : buildImagesGenerationPayload(testPayload)),
       signal: controller.signal,
     });
     const text = await resp.text();
@@ -1371,10 +1415,17 @@ app.post("/api/admin/test-api", async (c) => {
     let hasImage = false;
     try {
       const j = JSON.parse(text);
-      const data = Array.isArray(j?.data) ? j.data : [];
-      hasImage = data.some((d: unknown) => d && typeof d === "object" && (typeof (d as { b64_json?: unknown }).b64_json === "string" || typeof (d as { url?: unknown }).url === "string"));
+      if (apiPath === "/v1/responses") {
+        const output = Array.isArray(j?.output) ? j.output : [];
+        hasImage = output.some((item: unknown) => item && typeof item === "object"
+          && (item as { type?: unknown }).type === "image_generation_call"
+          && (typeof (item as { result?: unknown }).result === "string" || Array.isArray((item as { result?: unknown }).result)));
+      } else {
+        const data = Array.isArray(j?.data) ? j.data : [];
+        hasImage = data.some((d: unknown) => d && typeof d === "object" && (typeof (d as { b64_json?: unknown }).b64_json === "string" || typeof (d as { url?: unknown }).url === "string"));
+      }
     } catch {}
-    return c.json({ status: hasImage ? "ok" : "warn", mode, elapsed_ms: elapsed, http_status: resp.status, has_image: hasImage });
+    return c.json({ status: hasImage ? "ok" : "warn", mode, api_path: apiPath, elapsed_ms: elapsed, http_status: resp.status, has_image: hasImage });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const aborted = controller.signal.aborted;

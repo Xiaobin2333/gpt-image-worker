@@ -4,6 +4,26 @@ import test from "node:test";
 
 import { runSettledBatch } from "../src/batch.ts";
 
+const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
+const worker = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+
+function loadBuildResponsesPayload() {
+  const match = proxy.match(/export function buildResponsesPayload\([\s\S]*?^\}/m);
+  assert.ok(match, "missing buildResponsesPayload");
+  const javascript = match[0]
+    .replace(/^export /, "")
+    .replace(/payload: GenerateRequestBody/, "payload")
+    .replace(/responsesModel: string/, "responsesModel")
+    .replace(/\): Record<string, unknown>/, ")")
+    .replace(/const tool: Record<string, unknown>/, "const tool");
+  return new Function("parseDataUrl", `${javascript}; return buildResponsesPayload;`)(
+    (value) => {
+      if (!String(value).startsWith("data:")) throw new Error("invalid data URL");
+      return value;
+    },
+  );
+}
+
 test("runSettledBatch keeps successful images when one call fails", async () => {
   const started = [];
   const batch = await runSettledBatch(4, 2, async (index) => {
@@ -29,21 +49,73 @@ test("runSettledBatch reports every failure when the whole batch fails", async (
 });
 
 test("sequential image edits continue after individual failures", async () => {
-  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
   assert.match(proxy, /if \(useSingleImagePerCall\) \{[\s\S]*single-image attempt failed, continuing batch[\s\S]*continue;/);
   assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
 });
 
 test("Images API falls back when the upstream rejects tools[0].n", async () => {
-  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
   assert.match(proxy, /function requiresSingleImageCalls[\s\S]*\^gpt-image-2[\s\S]*\.test\(payload\.model\.trim\(\)\)/);
   assert.match(proxy, /let useSingleImagePerCall = requiresSingleImageCalls\(payload\)/);
-  assert.match(proxy, /if \(!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*useSingleImagePerCall = true[\s\S]*continue;/);
+  assert.match(proxy, /if \(!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*runParallelSingleCalls\(remaining, remaining, "images fallback"\)[\s\S]*break;/);
   assert.match(proxy, /const perCall = useSingleImagePerCall \? 1 : remaining/);
 });
 
+test("Responses API uses an image_generation tool payload", () => {
+  const buildResponsesPayload = loadBuildResponsesPayload();
+  const payload = {
+    prompt: "draw a red circle",
+    size: "1536x1024",
+    model: "gpt-image-2",
+    n: 20,
+    quality: "high",
+    output_format: "jpeg",
+    output_compression: 82,
+    response_format: "url",
+  };
+  assert.deepEqual(buildResponsesPayload(payload, "gpt-5.4"), {
+    model: "gpt-5.4",
+    input: "draw a red circle",
+    tools: [{
+      type: "image_generation",
+      size: "1536x1024",
+      quality: "high",
+      output_format: "jpeg",
+      output_compression: 82,
+    }],
+  });
+  assert.equal(buildResponsesPayload(payload, "  ").model, "gpt-image-2");
+  assert.deepEqual(buildResponsesPayload({ ...payload, output_format: "png" }, "gpt-5.4").tools, [{
+    type: "image_generation",
+    size: "1536x1024",
+    quality: "high",
+    output_format: "png",
+  }]);
+
+  const withReferences = buildResponsesPayload({
+    ...payload,
+    reference_images: ["data:image/png;base64,AAAA", "data:image/jpeg;base64,BBBB"],
+    mask: "data:image/png;base64,CCCC",
+  }, "gpt-5.4");
+  assert.deepEqual(withReferences.input, [{
+    role: "user",
+    content: [
+      { type: "input_text", text: "draw a red circle" },
+      { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+      { type: "input_image", image_url: "data:image/jpeg;base64,BBBB" },
+    ],
+  }]);
+  assert.deepEqual(withReferences.tools[0].input_image_mask, {
+    image_url: "data:image/png;base64,CCCC",
+  });
+  assert.equal("n" in withReferences.tools[0], false);
+});
+
+test("streamed jobs publish each committed image as an SSE image event", () => {
+  assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*options\.onImage\(entry, publishedIds\.size, targetCount\)/);
+  assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed, total\) => sendEvent\("image", \{ result, completed, total \}\)/);
+});
+
 test("job image records share one guarded gallery batch", async () => {
-  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
   assert.match(proxy, /const pendingEntries = entries\.filter[\s\S]*addGalleryEntriesForJob\([\s\S]*pendingEntries/);
   assert.match(proxy, /if \(!committed\)[\s\S]*deletePendingImages[\s\S]*Generation job lease lost/);
   assert.match(proxy, /if \(isFatalJobError\(e\)\) \{[\s\S]*throw e/);
