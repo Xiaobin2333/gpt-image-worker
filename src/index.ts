@@ -21,7 +21,7 @@ import {
   getImage,
   getJob,
   getPendingJobInput,
-  isJobRunning,
+  finishClaimedJob,
   offloadLargePayloadAssets,
   inflateJobInput,
   deleteJobTmpAssets,
@@ -606,23 +606,21 @@ type JobRunContext = {
   responses_concurrency: number;
 };
 
-const JOB_LEASE_RENEW_MS = 30_000;
-const JOB_CANCEL_CHECK_MS = 3_000;
+const JOB_LEASE_RENEW_MS = 45_000;
 
-function startJobExecutionMonitor(env: Bindings, jobId: string, controller: AbortController): () => void {
+function startJobExecutionMonitor(
+  env: Bindings,
+  jobId: string,
+  claimToken: string,
+  controller: AbortController,
+): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let lastLeaseRenewedAt = Date.now();
-
   const schedule = () => {
     timer = setTimeout(async () => {
       if (stopped) return;
       try {
-        const shouldRenew = Date.now() - lastLeaseRenewedAt >= JOB_LEASE_RENEW_MS;
-        const active = shouldRenew
-          ? await renewJobLease(env, jobId)
-          : await isJobRunning(env, jobId);
-        if (shouldRenew && active) lastLeaseRenewedAt = Date.now();
+        const active = await renewJobLease(env, jobId, claimToken);
         if (!active) {
           stopped = true;
           controller.abort(new Error("Generation job cancelled"));
@@ -635,7 +633,7 @@ function startJobExecutionMonitor(env: Bindings, jobId: string, controller: Abor
         });
       }
       if (!stopped) schedule();
-    }, JOB_CANCEL_CHECK_MS);
+    }, JOB_LEASE_RENEW_MS);
   };
 
   schedule();
@@ -646,13 +644,15 @@ function startJobExecutionMonitor(env: Bindings, jobId: string, controller: Abor
 }
 
 async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
-  const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
   if (input?.snapshot) {
+    const responsesConcurrency = input.snapshot.responses_concurrency
+      ?? (await loadRuntimeLimits(env)).responses_concurrency;
     return {
       ...input.snapshot,
-      responses_concurrency: input.snapshot.responses_concurrency ?? limits.responses_concurrency,
+      responses_concurrency: responsesConcurrency,
     };
   }
+  const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
   const active = getActivePresetFromState(apiState);
   return {
     api_url: active.api_url,
@@ -663,6 +663,126 @@ async function resolveJobContext(env: Bindings, input: GenerateJobInput | null):
     r2_public_domain: limits.r2_public_domain,
     responses_concurrency: limits.responses_concurrency,
   };
+}
+
+type ClaimedJobOutcome =
+  | { status: "success"; result: GenerateResponse }
+  | { status: "error"; detail: string }
+  | { status: "lost" };
+
+async function executeClaimedJob(
+  env: Bindings,
+  claimed: GenerateJob,
+  claimToken: string,
+  source: "stream" | "cron",
+): Promise<ClaimedJobOutcome> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  const stopExecutionMonitor = startJobExecutionMonitor(env, claimed.id, claimToken, controller);
+  let finalized = false;
+  let input: GenerateJobInput | null = null;
+  let runContext: JobRunContext | null = null;
+
+  const finish = async (status: "success" | "error", values: { result?: GenerateResponse; detail?: string }) => {
+    const committed = await finishClaimedJob(env, {
+      ...claimed,
+      status,
+      updated_at: new Date().toISOString(),
+      result: values.result,
+      detail: values.detail,
+    }, claimToken);
+    if (committed) finalized = true;
+    return committed;
+  };
+
+  try {
+    const rawInput = await getPendingJobInput(env, claimed.id);
+    input = rawInput ? await inflateJobInput(env, rawInput) : null;
+    runContext = await resolveJobContext(env, input);
+
+    const producedIds = claimed.produced_ids ?? [];
+    const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
+    const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
+    if (existingEntries.length >= targetN && targetN > 0) {
+      const result = buildGenerateResponse(runContext.r2_public_domain, existingEntries.slice(0, targetN));
+      return await finish("success", { result }) ? { status: "success", result } : { status: "lost" };
+    }
+
+    if (!input) {
+      if (existingEntries.length > 0) {
+        const result = buildGenerateResponse(runContext.r2_public_domain, existingEntries);
+        return await finish("success", { result }) ? { status: "success", result } : { status: "lost" };
+      }
+      const detail = "Pending input missing";
+      return await finish("error", { detail }) ? { status: "error", detail } : { status: "lost" };
+    }
+
+    if (!runContext.api_url || !runContext.api_key) {
+      const detail = "API not configured";
+      return await finish("error", { detail }) ? { status: "error", detail } : { status: "lost" };
+    }
+
+    const startedAt = Date.now();
+    const entries = await callImageGeneration(
+      env,
+      { api_url: runContext.api_url, api_key: runContext.api_key, api_path: runContext.api_path as ApiPath },
+      input.payload,
+      input.owner_id,
+      controller.signal,
+      {
+        jobId: claimed.id,
+        existingEntries,
+        maxFileSizeMb: runContext.max_file_size_mb,
+        apiPresetName: runContext.api_preset_name || undefined,
+        responsesConcurrency: runContext.responses_concurrency,
+        claimToken,
+      },
+    );
+    if (entries.length === 0) throw new Error("No images returned by upstream");
+    const duration = `${((Date.now() - startedAt) / 1000).toFixed(2)}s`;
+    const firstNew = entries.find((entry) => !existingEntries.some((existing) => existing.id === entry.id));
+    if (firstNew) {
+      await updateGalleryEntry(env, firstNew.id, { duration }).catch((error: unknown) =>
+        console.error("updateGalleryEntry failed", {
+          jobId: claimed.id,
+          id: firstNew.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      firstNew.duration = duration;
+    }
+    const result = buildGenerateResponse(runContext.r2_public_domain, entries);
+    return await finish("success", { result }) ? { status: "success", result } : { status: "lost" };
+  } catch (error) {
+    const current = await getJob(env, claimed.id);
+    if (current?.claim_token === claimToken && (current.status === "success" || current.status === "error")) {
+      finalized = true;
+      if (current.status === "success" && current.result) return { status: "success", result: current.result };
+      return { status: "error", detail: current.detail ?? "unknown" };
+    }
+    const ownsClaim = current?.status === "running" && current.claim_token === claimToken;
+    if (!ownsClaim) return { status: "lost" };
+
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`${source} job failed`, {
+      jobId: claimed.id,
+      detail,
+      error_type: error instanceof Error ? error.name : typeof error,
+      api_url: runContext?.api_url,
+      api_path: runContext?.api_path,
+      model: input?.payload.model,
+      size: input?.payload.size,
+      quality: input?.payload.quality,
+      output_format: input?.payload.output_format,
+      response_format: input?.payload.response_format,
+      n: input?.payload.n,
+    });
+    return await finish("error", { detail }) ? { status: "error", detail } : { status: "lost" };
+  } finally {
+    clearTimeout(timer);
+    stopExecutionMonitor();
+    if (finalized) await deleteJobTmpAssets(env, claimed.id).catch(() => {});
+  }
 }
 
 app.post("/api/generate", async (c) => {
@@ -808,14 +928,17 @@ app.get("/api/generate/:jobId/stream", async (c) => {
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
-      const send = (line: string) => controller.enqueue(enc.encode(line));
-      const sendEvent = (event: string, data: unknown) => send(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       let closed = false;
       const close = () => {
         if (closed) return;
         closed = true;
         try { controller.close(); } catch {}
       };
+      const send = (line: string) => {
+        if (closed) return;
+        try { controller.enqueue(enc.encode(line)); } catch { close(); }
+      };
+      const sendEvent = (event: string, data: unknown) => send(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       const heartbeat = setInterval(() => {
         if (closed) return;
         try { send(`: heartbeat\n\n`); } catch { close(); }
@@ -834,122 +957,19 @@ app.get("/api/generate/:jobId/stream", async (c) => {
         const claimed = await tryClaimJob(env, jobId);
         if (!claimed) {
           sendEvent("waiting", { reason: "another-worker-running" });
-          for (let i = 0; i < 60 && !closed; i++) {
-            await new Promise((r) => setTimeout(r, 5_000));
-            const j = await getJob(env, jobId);
-            if (!j) { sendEvent("error", { detail: "Job vanished" }); return; }
-            if (j.status === "success" && j.result) { sendEvent("done", { result: j.result }); return; }
-            if (j.status === "error") { sendEvent("error", { detail: j.detail ?? "unknown" }); return; }
-          }
-          sendEvent("error", { detail: "Timed out waiting for worker" });
+          return;
+        }
+        const claimToken = claimed.claim_token;
+        if (!claimToken) {
+          sendEvent("error", { detail: "Generation claim token missing" });
           return;
         }
 
         sendEvent("running", { updated_at: claimed.updated_at });
-
-        const rawInput = await getPendingJobInput(env, jobId);
-        const input = rawInput ? await inflateJobInput(env, rawInput) : null;
-        const ctx = await resolveJobContext(env, input);
-
-        const producedIds = claimed.produced_ids ?? [];
-        const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
-        const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
-        if (existingEntries.length >= targetN && targetN > 0) {
-          const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
-          await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-          const finished = await getJob(env, jobId);
-          if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
-          else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
-          return;
-        }
-
-        if (!input) {
-          if (existingEntries.length > 0) {
-            const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
-            await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-            const finished = await getJob(env, jobId);
-            if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
-            else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
-            return;
-          }
-          await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "Pending input missing" });
-          sendEvent("error", { detail: "Pending input missing" });
-          return;
-        }
-
-        if (!ctx.api_url || !ctx.api_key) {
-          const detail = "API not configured";
-          await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
-          sendEvent("error", { detail });
-          return;
-        }
-
-        const controller2 = new AbortController();
-        const timer = setTimeout(() => controller2.abort(), 5 * 60 * 1000);
-        const stopExecutionMonitor = startJobExecutionMonitor(env, jobId, controller2);
-        const startedAt = Date.now();
-        try {
-          const entries = await callImageGeneration(
-            env,
-            { api_url: ctx.api_url, api_key: ctx.api_key, api_path: ctx.api_path as ApiPath },
-            input.payload,
-            input.owner_id,
-            controller2.signal,
-            {
-              jobId,
-              existingEntries,
-              maxFileSizeMb: ctx.max_file_size_mb,
-              apiPresetName: ctx.api_preset_name || undefined,
-              responsesConcurrency: ctx.responses_concurrency,
-              ensureJobActive: async () => {
-                if (!(await isJobRunning(env, jobId))) throw new Error("Generation job cancelled");
-              },
-            },
-          );
-          if (entries.length === 0) throw new Error("No images returned by upstream");
-          const duration = `${((Date.now() - startedAt) / 1000).toFixed(2)}s`;
-          const firstNew = entries.find((e) => !existingEntries.some((x) => x.id === e.id));
-          if (firstNew) {
-            await updateGalleryEntry(env, firstNew.id, { duration }).catch((err: unknown) =>
-              console.error("updateGalleryEntry failed", { jobId, id: firstNew.id, err: err instanceof Error ? err.message : String(err) }),
-            );
-            firstNew.duration = duration;
-          }
-          if (!(await isJobRunning(env, jobId))) {
-            sendEvent("error", { detail: "cancelled" });
-            return;
-          }
-          const result = buildGenerateResponse(ctx.r2_public_domain, entries);
-          await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-          const finished = await getJob(env, jobId);
-          if (finished?.status === "success" && finished.result) sendEvent("done", { result: finished.result });
-          else sendEvent("error", { detail: finished?.detail ?? "Job did not complete" });
-        } catch (e) {
-          const current = await getJob(env, jobId);
-          const cancelled = current?.status === "error" && current.detail === "cancelled";
-          const detail = cancelled ? "cancelled" : e instanceof Error ? e.message : String(e);
-          console.error("stream job failed", {
-            jobId,
-            detail,
-            error_type: e instanceof Error ? e.name : typeof e,
-            api_url: ctx.api_url,
-            api_path: ctx.api_path,
-            model: input.payload.model,
-            size: input.payload.size,
-            quality: input.payload.quality,
-            output_format: input.payload.output_format,
-            response_format: input.payload.response_format,
-            n: input.payload.n,
-          });
-          if (!cancelled) {
-            await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
-          }
-          sendEvent("error", { detail });
-        } finally {
-          clearTimeout(timer);
-          stopExecutionMonitor();
-          await deleteJobTmpAssets(env, jobId).catch(() => {});
-        }
+        const outcome = await executeClaimedJob(env, claimed, claimToken, "stream");
+        if (outcome.status === "success") sendEvent("done", { result: outcome.result });
+        else if (outcome.status === "error") sendEvent("error", { detail: outcome.detail });
+        else sendEvent("waiting", { reason: "job-lease-lost" });
       } finally {
         clearInterval(heartbeat);
         close();
@@ -1299,106 +1319,18 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     console.log("skip already-claimed job", { jobId });
     return;
   }
-
-  const rawInput = await getPendingJobInput(env, jobId);
-  const input = rawInput ? await inflateJobInput(env, rawInput) : null;
-  const ctx = await resolveJobContext(env, input);
-
-  const producedIds = claimed.produced_ids ?? [];
-  const existingEntries = producedIds.length > 0 ? await listProducedEntries(env, producedIds) : [];
-  const targetN = input?.payload.n ?? Math.max(1, existingEntries.length);
-  if (existingEntries.length >= targetN && targetN > 0) {
-    const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries.slice(0, targetN));
-    await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-    await deleteJobTmpAssets(env, jobId).catch(() => {});
-    return;
-  }
-  if (!input) {
-    if (existingEntries.length > 0) {
-      const result = buildGenerateResponse(ctx.r2_public_domain, existingEntries);
-      await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-      await deleteJobTmpAssets(env, jobId).catch(() => {});
-      return;
-    }
-    await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "Pending input missing" });
-    await deleteJobTmpAssets(env, jobId).catch(() => {});
-    return;
-  }
-
-  if (!ctx.api_url || !ctx.api_key) {
-    await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail: "API not configured" });
-    await deleteJobTmpAssets(env, jobId).catch(() => {});
-    return;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
-  const stopExecutionMonitor = startJobExecutionMonitor(env, jobId, controller);
-  const startedAt = Date.now();
-  try {
-    const entries = await callImageGeneration(
-      env,
-      { api_url: ctx.api_url, api_key: ctx.api_key, api_path: ctx.api_path as ApiPath },
-      input.payload,
-      input.owner_id,
-      controller.signal,
-      {
-        jobId,
-        existingEntries,
-        maxFileSizeMb: ctx.max_file_size_mb,
-        apiPresetName: ctx.api_preset_name || undefined,
-        responsesConcurrency: ctx.responses_concurrency,
-        ensureJobActive: async () => {
-          if (!(await isJobRunning(env, jobId))) throw new Error("Generation job cancelled");
-        },
-      },
-    );
-    if (entries.length === 0) throw new Error("No images returned by upstream");
-    const duration = `${((Date.now() - startedAt) / 1000).toFixed(2)}s`;
-    const firstNew = entries.find((e) => !existingEntries.some((x) => x.id === e.id));
-    if (firstNew) {
-      await updateGalleryEntry(env, firstNew.id, { duration }).catch((err: unknown) =>
-        console.error("updateGalleryEntry failed", { jobId, id: firstNew.id, err: err instanceof Error ? err.message : String(err) }),
-      );
-      firstNew.duration = duration;
-    }
-    if (!(await isJobRunning(env, jobId))) return;
-    const result = buildGenerateResponse(ctx.r2_public_domain, entries);
-    await saveJob(env, { ...claimed, status: "success", updated_at: new Date().toISOString(), result });
-  } catch (e) {
-    const current = await getJob(env, jobId);
-    const cancelled = current?.status === "error" && current.detail === "cancelled";
-    const detail = cancelled ? "cancelled" : e instanceof Error ? e.message : String(e);
-    console.error("cron job failed", {
-      jobId,
-      detail,
-      error_type: e instanceof Error ? e.name : typeof e,
-      api_url: ctx.api_url,
-      api_path: ctx.api_path,
-      model: input.payload.model,
-      size: input.payload.size,
-      quality: input.payload.quality,
-      output_format: input.payload.output_format,
-      response_format: input.payload.response_format,
-      n: input.payload.n,
-    });
-    if (!cancelled) {
-      await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
-    }
-  } finally {
-    clearTimeout(timer);
-    stopExecutionMonitor();
-    await deleteJobTmpAssets(env, jobId).catch(() => {});
-  }
+  const claimToken = claimed.claim_token;
+  if (!claimToken) throw new Error(`Generation claim token missing for ${jobId}`);
+  await executeClaimedJob(env, claimed, claimToken, "cron");
 }
 
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledController, env: Bindings, ctx: ExecutionContext) {
-    const ids = await listPendingJobIds(env, 5);
+    const ids = await listPendingJobIds(env, 1);
 
     const minute = new Date(event.scheduledTime).getUTCMinutes();
-    if (minute % 30 === 0 || ids.length === 0) {
+    if (ids.length === 0 && minute % 30 === 0) {
       ctx.waitUntil(Promise.all([
         pruneOldJobs(env).catch((err) => console.error("pruneOldJobs failed", { err: err instanceof Error ? err.message : String(err) })),
         pruneRateLimits(env).catch((err) => console.error("pruneRateLimits failed", { err: err instanceof Error ? err.message : String(err) })),

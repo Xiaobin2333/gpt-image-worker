@@ -33,3 +33,10 @@ test("sequential image edits return earlier successes after a later failure", as
   assert.match(proxy, /if \(entries\.length > 0\) \{[\s\S]*generation batch partially failed[\s\S]*break;/);
   assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
 });
+
+test("job image records share one guarded gallery batch", async () => {
+  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
+  assert.match(proxy, /const pendingEntries = entries\.filter[\s\S]*addGalleryEntriesForJob\([\s\S]*pendingEntries/);
+  assert.match(proxy, /if \(!committed\)[\s\S]*deletePendingImages[\s\S]*Generation job lease lost/);
+  assert.match(proxy, /if \(isFatalJobError\(e\)\) \{[\s\S]*throw e/);
+});

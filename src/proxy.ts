@@ -1,5 +1,5 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
-import { addToGallery, appendProducedId, deleteGalleryEntry, deleteImage, generateImageId, saveImage } from "./storage";
+import { addGalleryEntriesForJob, addToGallery, deleteImage, deleteImages, generateImageId, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
 import { runSettledBatch } from "./batch";
 
@@ -324,7 +324,7 @@ export interface CallImageGenerationOptions {
   maxFileSizeMb?: number;
   apiPresetName?: string;
   responsesConcurrency?: number;
-  ensureJobActive?: () => Promise<void>;
+  claimToken?: string;
 }
 
 export async function callImageGeneration(
@@ -342,13 +342,23 @@ export async function callImageGeneration(
 
   const targetCount = Math.max(1, payload.n);
   const entries: GalleryEntry[] = [...(options.existingEntries ?? [])];
+  const existingIds = new Set(entries.map((entry) => entry.id));
   if (entries.length >= targetCount) return entries.slice(0, targetCount);
 
-  const ensureActive = async () => {
+  const ensureNotAborted = () => {
     if (signal?.aborted) {
       throw signal.reason instanceof Error ? signal.reason : new Error("Generation job cancelled");
     }
-    await options.ensureJobActive?.();
+  };
+  const isFatalJobError = (error: unknown) => {
+    if (signal?.aborted) return true;
+    const message = error instanceof Error ? error.message : String(error);
+    return (error instanceof DOMException && error.name === "AbortError")
+      || /Generation job (?:lease lost|cancelled)/i.test(message);
+  };
+
+  const deletePendingImages = async (pending: GalleryEntry[]) => {
+    await deleteImages(env, pending.map((entry) => entry.filename)).catch(() => {});
   };
 
   console.log("generation start", {
@@ -369,9 +379,9 @@ export async function callImageGeneration(
     if (!rec.b64_json && rec.url) {
       console.log("upstream returned image url", { url: rec.url });
     }
-    await ensureActive();
+    ensureNotAborted();
     const bytes = await fetchImageBytes(rec, sourceText, settings.api_url, settings.api_key, signal);
-    await ensureActive();
+    ensureNotAborted();
     if (bytes.byteLength > maxBytes) {
       throw new Error(`Image too large: ${bytes.byteLength} bytes (max ${maxBytes})`);
     }
@@ -379,7 +389,7 @@ export async function callImageGeneration(
     const filename = `${id}.${fmt.extension}`;
     await saveImage(env, filename, bytes, fmt.mediaType);
     try {
-      await ensureActive();
+      ensureNotAborted();
     } catch (err) {
       await deleteImage(env, filename).catch(() => {});
       throw err;
@@ -405,21 +415,19 @@ export async function callImageGeneration(
       has_reference: hasReferences,
       owner_id: ownerId,
     };
-    try {
-      await addToGallery(env, entry);
-    } catch (err) {
-      await deleteImage(env, filename).catch(() => {});
-      throw err;
-    }
-    if (options.jobId && !(await appendProducedId(env, options.jobId, id))) {
-      await deleteGalleryEntry(env, id).catch(() => {});
-      throw new Error("Generation job cancelled");
+    if (!options.jobId) {
+      try {
+        await addToGallery(env, entry);
+      } catch (err) {
+        await deleteImage(env, filename).catch(() => {});
+        throw err;
+      }
     }
     return entry;
   };
 
   const runOneCall = async (perCall: number, attempt: number): Promise<GalleryEntry[]> => {
-    await ensureActive();
+    ensureNotAborted();
     const callPayload: GenerateRequestBody = { ...payload, n: perCall };
     let resp: Response;
     if (apiPath === "/v1/images/generations") {
@@ -443,7 +451,7 @@ export async function callImageGeneration(
     }
 
     const parsed = await readUpstreamJson(resp);
-    await ensureActive();
+    ensureNotAborted();
     if (parsed.status >= 400) throw new Error(upstreamErrorMessage(parsed));
     if (!parsed.json) throw new Error(`Upstream returned non-JSON (${parsed.status}): ${parsed.text.slice(0, 200)}`);
 
@@ -463,14 +471,41 @@ export async function callImageGeneration(
       throw new Error(`No image data in upstream response: ${parsed.text.slice(0, 200)}`);
     }
     const usable = records.slice(0, perCall);
-    return Promise.all(usable.map((rec) => persistEntry(rec, parsed.text)));
+    const persisted = await runSettledBatch(
+      usable.length,
+      usable.length,
+      (index) => persistEntry(usable[index]!, parsed.text),
+    );
+    if (persisted.errors.length > 0) {
+      console.warn("upstream records partially failed to persist", {
+        requested: usable.length,
+        succeeded: persisted.results.length,
+        failed: persisted.errors.length,
+      });
+      const fatal = persisted.errors.find(({ error }) => isFatalJobError(error));
+      if (fatal) {
+        await deletePendingImages(persisted.results);
+        throw fatal.error;
+      }
+      if (persisted.results.length === 0) throw persisted.errors[0]!.error;
+    }
+    return persisted.results;
   };
 
   if (apiPath === "/v1/responses") {
     const remaining = targetCount - entries.length;
     const cap = Math.max(1, Math.min(10, Math.floor(options.responsesConcurrency ?? 3)));
     const concurrency = Math.min(remaining, cap);
-    const batch = await runSettledBatch(remaining, concurrency, (index) => runOneCall(1, index + 1));
+    let fatalError: unknown;
+    const batch = await runSettledBatch(remaining, concurrency, async (index) => {
+      if (fatalError) throw fatalError;
+      try {
+        return await runOneCall(1, index + 1);
+      } catch (error) {
+        if (isFatalJobError(error)) fatalError = error;
+        throw error;
+      }
+    });
     for (const produced of batch.results) {
       for (const entry of produced) {
         if (entries.length < targetCount) entries.push(entry);
@@ -486,6 +521,11 @@ export async function callImageGeneration(
           message: error instanceof Error ? error.message : String(error),
         })),
       });
+      const fatal = batch.errors.find(({ error }) => isFatalJobError(error));
+      if (fatal) {
+        await deletePendingImages(entries.filter((entry) => !existingIds.has(entry.id)));
+        throw fatal.error;
+      }
       if (entries.length === 0) throw batch.errors[0]!.error;
     }
   } else {
@@ -506,13 +546,17 @@ export async function callImageGeneration(
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (isFatalJobError(e)) {
+          await deletePendingImages(entries.filter((entry) => !existingIds.has(entry.id)));
+          throw e;
+        }
         const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
         if (transient && transientRetries < maxTransientRetries) {
           const backoffMs = transientBackoffMs[transientRetries] ?? 1600;
           transientRetries += 1;
           console.warn("upstream transient failure, retrying", { attempt, transientRetries, backoffMs, msg });
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
-          await ensureActive();
+          ensureNotAborted();
           continue;
         }
         if (entries.length > 0) {
@@ -530,5 +574,28 @@ export async function callImageGeneration(
   }
 
   if (entries.length === 0) throw new Error("Upstream produced no images");
+  const pendingEntries = entries.filter((entry) => !existingIds.has(entry.id));
+  if (options.jobId && pendingEntries.length > 0) {
+    if (!options.claimToken) {
+      await deletePendingImages(pendingEntries);
+      throw new Error("Generation claim token missing");
+    }
+    try {
+      ensureNotAborted();
+    } catch (error) {
+      await deletePendingImages(pendingEntries);
+      throw error;
+    }
+    const committed = await addGalleryEntriesForJob(
+      env,
+      pendingEntries,
+      options.jobId,
+      options.claimToken,
+    );
+    if (!committed) {
+      await deletePendingImages(pendingEntries);
+      throw new Error("Generation job lease lost");
+    }
+  }
   return entries.slice(0, targetCount);
 }

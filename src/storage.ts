@@ -141,35 +141,50 @@ function rowToJob(row: Record<string, unknown> | null): GenerateJob | null {
     result: row.result ? JSON.parse(String(row.result)) : undefined,
     detail: row.detail ? String(row.detail) : undefined,
     produced_ids: producedIds,
+    claim_token: row.claim_token ? String(row.claim_token) : undefined,
   };
 }
 
 export async function getJob(env: Bindings, id: string): Promise<GenerateJob | null> {
   const row = await env.DB.prepare(
-    `SELECT id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids FROM jobs WHERE id = ?`,
+    `SELECT id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids, claim_token FROM jobs WHERE id = ?`,
   )
     .bind(id)
     .first();
   return rowToJob(row as Record<string, unknown> | null);
 }
 
-export async function appendProducedId(env: Bindings, jobId: string, galleryId: string): Promise<boolean> {
+export async function appendProducedId(
+  env: Bindings,
+  jobId: string,
+  claimToken: string,
+  galleryId: string,
+): Promise<boolean> {
   const now = new Date().toISOString();
-  const updated = await env.DB.prepare(
+  const updated = await prepareProducedCheckpoint(env, jobId, claimToken, [galleryId], now).first();
+  return updated !== null;
+}
+
+function prepareProducedCheckpoint(
+  env: Bindings,
+  jobId: string,
+  claimToken: string,
+  galleryIds: string[],
+  now: string,
+): D1PreparedStatement {
+  if (galleryIds.length === 0) throw new Error("At least one gallery id is required");
+  const appends = galleryIds.map(() => "'$[#]', ?").join(", ");
+  return env.DB.prepare(
     `UPDATE jobs
-       SET produced_ids = json(
-             CASE
-               WHEN produced_ids IS NULL OR produced_ids = '' THEN json_array(?1)
-               ELSE json_insert(produced_ids, '$[#]', ?1)
-             END
+       SET produced_ids = json_insert(
+             CASE WHEN produced_ids IS NULL OR produced_ids = '' THEN json_array() ELSE produced_ids END,
+             ${appends}
            ),
-           updated_at = ?2
-     WHERE id = ?3 AND status = 'running'
+           updated_at = ?
+     WHERE id = ? AND status = 'running' AND claim_token = ?
      RETURNING id`,
   )
-    .bind(galleryId, now, jobId)
-    .first();
-  return updated !== null;
+    .bind(...galleryIds, now, jobId, claimToken);
 }
 
 export async function listProducedEntries(env: Bindings, producedIds: string[]): Promise<GalleryEntry[]> {
@@ -215,36 +230,63 @@ export async function deletePendingJob(env: Bindings, jobId: string): Promise<vo
 export async function tryClaimJob(env: Bindings, jobId: string): Promise<GenerateJob | null> {
   const cutoff = new Date(Date.now() - STALE_RUNNING_MS).toISOString();
   const now = new Date().toISOString();
+  const claimToken = crypto.randomUUID();
   const updated = await env.DB.prepare(
-    `UPDATE jobs SET status = 'running', updated_at = ?
+    `UPDATE jobs SET status = 'running', updated_at = ?, claim_token = ?
        WHERE id = ?
          AND (status = 'queued' OR (status = 'running' AND updated_at < ?))
-       RETURNING id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids`,
+       RETURNING id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids, claim_token`,
   )
-    .bind(now, jobId, cutoff)
+    .bind(now, claimToken, jobId, cutoff)
     .first();
   return rowToJob(updated as Record<string, unknown> | null);
 }
 
-export async function renewJobLease(env: Bindings, jobId: string): Promise<boolean> {
+export async function renewJobLease(env: Bindings, jobId: string, claimToken: string): Promise<boolean> {
   const now = new Date().toISOString();
   const updated = await env.DB.prepare(
     `UPDATE jobs SET updated_at = ?
-       WHERE id = ? AND status = 'running'
+       WHERE id = ? AND status = 'running' AND claim_token = ?
        RETURNING id`,
   )
-    .bind(now, jobId)
+    .bind(now, jobId, claimToken)
     .first();
   return updated !== null;
 }
 
-export async function isJobRunning(env: Bindings, jobId: string): Promise<boolean> {
+export async function isJobRunning(env: Bindings, jobId: string, claimToken: string): Promise<boolean> {
   const row = await env.DB.prepare(
-    `SELECT id FROM jobs WHERE id = ? AND status = 'running'`,
+    `SELECT id FROM jobs WHERE id = ? AND status = 'running' AND claim_token = ?`,
   )
-    .bind(jobId)
+    .bind(jobId, claimToken)
     .first();
   return row !== null;
+}
+
+export async function finishClaimedJob(
+  env: Bindings,
+  job: GenerateJob,
+  claimToken: string,
+): Promise<boolean> {
+  if (job.status !== "success" && job.status !== "error") {
+    throw new Error("finishClaimedJob requires a terminal status");
+  }
+  const updated = await env.DB.prepare(
+    `UPDATE jobs
+       SET status = ?, updated_at = ?, result = ?, detail = ?, payload = NULL
+       WHERE id = ? AND status = 'running' AND claim_token = ?
+       RETURNING id`,
+  )
+    .bind(
+      job.status,
+      job.updated_at,
+      job.result ? JSON.stringify(job.result) : null,
+      job.detail ?? null,
+      job.id,
+      claimToken,
+    )
+    .first();
+  return updated !== null;
 }
 
 export async function pruneOldJobs(env: Bindings): Promise<void> {
@@ -331,7 +373,7 @@ export async function cancelGenerateJob(
            payload = NULL,
            updated_at = ?
        WHERE id = ? AND status IN ('queued', 'running')
-       RETURNING id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids`,
+       RETURNING id, status, created_at, updated_at, prompt, owner_id, result, detail, produced_ids, claim_token`,
   )
     .bind(now, id)
     .first();
@@ -422,6 +464,10 @@ export async function deleteImage(env: Bindings, filename: string): Promise<void
   await env.IMAGES.delete(filename);
 }
 
+export async function deleteImages(env: Bindings, filenames: string[]): Promise<void> {
+  if (filenames.length > 0) await env.IMAGES.delete(filenames);
+}
+
 function rowToEntry(row: Record<string, unknown> | null): GalleryEntry | null {
   if (!row) return null;
   return {
@@ -480,6 +526,65 @@ export async function addToGallery(
     )
     .run();
   return entry;
+}
+
+export async function addToGalleryForJob(
+  env: Bindings,
+  entry: GalleryEntry,
+  jobId: string,
+  claimToken: string,
+): Promise<boolean> {
+  return addGalleryEntriesForJob(env, [entry], jobId, claimToken);
+}
+
+export async function addGalleryEntriesForJob(
+  env: Bindings,
+  entries: GalleryEntry[],
+  jobId: string,
+  claimToken: string,
+): Promise<boolean> {
+  if (entries.length === 0) return true;
+  const inserts = entries.map((entry) => env.DB.prepare(
+    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, is_public, has_reference, owner_id)
+     SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+       WHERE EXISTS (
+         SELECT 1 FROM jobs WHERE id = ? AND status = 'running' AND claim_token = ?
+       )`,
+  ).bind(...galleryEntryValues(entry), jobId, claimToken));
+  const checkpoint = prepareProducedCheckpoint(
+    env,
+    jobId,
+    claimToken,
+    entries.map((entry) => entry.id),
+    new Date().toISOString(),
+  );
+  const results = await env.DB.batch([...inserts, checkpoint]);
+  return results.length === entries.length + 1
+    && results.every((result) => Number(result?.meta?.changes ?? 0) === 1);
+}
+
+function galleryEntryValues(entry: GalleryEntry): unknown[] {
+  return [
+    entry.id,
+    entry.filename,
+    entry.prompt,
+    entry.size,
+    entry.created_at,
+    entry.model ?? null,
+    entry.quality ?? null,
+    entry.output_format ?? null,
+    entry.output_compression ?? null,
+    entry.response_format ?? null,
+    entry.n ?? null,
+    entry.api_path ?? null,
+    entry.api_preset_name ?? null,
+    entry.image_width ?? null,
+    entry.image_height ?? null,
+    entry.duration ?? null,
+    entry.is_public ? 1 : 0,
+    entry.has_reference ? 1 : 0,
+    entry.owner_id ?? null,
+  ];
 }
 
 export async function updateGalleryEntry(

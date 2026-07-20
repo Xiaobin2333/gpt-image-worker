@@ -109,6 +109,7 @@ export interface GenerateJob {
   detail?: string;
   owner_id?: string;
   produced_ids?: string[];
+  claim_token?: string;
 }
 
 export interface GenerateJobSnapshot {
