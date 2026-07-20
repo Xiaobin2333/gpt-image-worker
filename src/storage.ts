@@ -654,11 +654,17 @@ export async function getEntryByFilename(
 
 export interface GalleryPage {
   total: number;
+  total_bytes: number;
   page: number;
   page_size: number;
   total_pages: number;
   has_prev: boolean;
   has_next: boolean;
+  filter_options: {
+    models: string[];
+    presets: string[];
+    sizes: string[];
+  };
   images: GalleryEntry[];
 }
 
@@ -667,49 +673,126 @@ export interface GalleryPageOptions {
   pageSize: number;
   includeAllPrivate?: boolean;
   ownerId?: string;
+  prompt?: string;
+  model?: string;
+  preset?: string;
+  size?: string;
+  dateFrom?: string;
+  dateToExclusive?: string;
+  favorite?: boolean;
+}
+
+function distinctGalleryValues(result: D1Result<unknown>): string[] {
+  return (result.results ?? [])
+    .map((row) => String((row as Record<string, unknown>).value ?? "").trim())
+    .filter(Boolean);
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 export async function getGalleryPage(
   env: Bindings,
   options: GalleryPageOptions,
 ): Promise<GalleryPage> {
-  let where: string;
-  const params: unknown[] = [];
+  let scopeWhere: string;
+  const scopeParams: unknown[] = [];
   if (options.includeAllPrivate) {
-    where = "1 = 1";
+    scopeWhere = "1 = 1";
   } else if (options.ownerId !== undefined) {
-    where = "(is_public = 1 OR owner_id = ?)";
-    params.push(options.ownerId);
+    scopeWhere = "(is_public = 1 OR owner_id = ?)";
+    scopeParams.push(options.ownerId);
   } else {
-    where = "is_public = 1";
+    scopeWhere = "is_public = 1";
   }
 
-  const totalRow = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gallery WHERE ${where}`)
+  const clauses = [scopeWhere];
+  const params = [...scopeParams];
+  if (options.prompt) {
+    clauses.push("prompt COLLATE NOCASE LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(options.prompt)}%`);
+  }
+  if (options.model) {
+    clauses.push("model = ?");
+    params.push(options.model);
+  }
+  if (options.preset) {
+    clauses.push("api_preset_name = ?");
+    params.push(options.preset);
+  }
+  if (options.size) {
+    clauses.push("size = ?");
+    params.push(options.size);
+  }
+  if (options.dateFrom) {
+    clauses.push("created_at >= ?");
+    params.push(options.dateFrom);
+  }
+  if (options.dateToExclusive) {
+    clauses.push("created_at < ?");
+    params.push(options.dateToExclusive);
+  }
+  if (options.favorite) clauses.push("favorite = 1");
+  const where = clauses.join(" AND ");
+
+  const totalRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(byte_size), 0) AS total_bytes FROM gallery WHERE ${where}`,
+  )
     .bind(...params)
     .first();
   const total = Number((totalRow as { n: number } | null)?.n ?? 0);
+  const totalBytes = Number((totalRow as { total_bytes?: number } | null)?.total_bytes ?? 0);
   const totalPages = Math.max(Math.ceil(total / options.pageSize), 1);
   const page = Math.min(Math.max(options.page, 1), totalPages);
   const offset = (page - 1) * options.pageSize;
 
-  const rs = await env.DB.prepare(
-    `SELECT * FROM gallery WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-  )
-    .bind(...params, options.pageSize, offset)
-    .all();
-  const images = (rs.results ?? [])
+  const queryResults = await env.DB.batch([
+    env.DB.prepare(`SELECT * FROM gallery WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .bind(...params, options.pageSize, offset),
+    env.DB.prepare(`SELECT DISTINCT model AS value FROM gallery WHERE ${scopeWhere} AND model IS NOT NULL AND model <> '' ORDER BY model`)
+      .bind(...scopeParams),
+    env.DB.prepare(`SELECT DISTINCT api_preset_name AS value FROM gallery WHERE ${scopeWhere} AND api_preset_name IS NOT NULL AND api_preset_name <> '' ORDER BY api_preset_name`)
+      .bind(...scopeParams),
+    env.DB.prepare(`SELECT DISTINCT size AS value FROM gallery WHERE ${scopeWhere} AND size IS NOT NULL AND size <> '' ORDER BY size`)
+      .bind(...scopeParams),
+  ]);
+  const [pageResult, modelResult, presetResult, sizeResult] = queryResults;
+  if (!pageResult || !modelResult || !presetResult || !sizeResult) {
+    throw new Error("Gallery query returned incomplete results");
+  }
+  const images = (pageResult.results ?? [])
     .map((r) => rowToEntry(r as Record<string, unknown>))
     .filter((e): e is GalleryEntry => e !== null);
 
   return {
     total,
+    total_bytes: totalBytes,
     page,
     page_size: options.pageSize,
     total_pages: totalPages,
     has_prev: page > 1,
     has_next: page < totalPages,
+    filter_options: {
+      models: distinctGalleryValues(modelResult),
+      presets: distinctGalleryValues(presetResult),
+      sizes: distinctGalleryValues(sizeResult),
+    },
     images,
   };
+}
+
+export async function setGalleryFavorite(
+  env: Bindings,
+  id: string,
+  favorite: boolean,
+): Promise<GalleryEntry | null> {
+  const row = await env.DB.prepare(
+    "UPDATE gallery SET favorite = ? WHERE id = ? RETURNING *",
+  )
+    .bind(favorite ? 1 : 0, id)
+    .first();
+  return rowToEntry(row as Record<string, unknown> | null);
 }
 
 export async function deleteGalleryEntry(

@@ -7,8 +7,10 @@ import {
   appendProducedId,
   cancelGenerateJob,
   finishClaimedJob,
+  getGalleryPage,
   isJobRunning,
   renewJobLease,
+  setGalleryFavorite,
 } from "../src/storage.ts";
 
 function leaseEnv(result) {
@@ -212,4 +214,77 @@ test("cancelGenerateJob reports a completion that wins the update race", async (
   const result = await cancelGenerateJob(env, "job-5", "owner-1");
   assert.equal(result.status, "already_finished");
   assert.equal(result.job.status, "success");
+});
+
+test("gallery filters preserve visibility and return options plus total bytes", async () => {
+  const statements = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        const statement = {
+          sql,
+          args: [],
+          bind(...args) { this.args = args; return this; },
+          async first() { return { n: 1, total_bytes: 2048 }; },
+        };
+        statements.push(statement);
+        return statement;
+      },
+      async batch(batch) {
+        return batch.map((statement, index) => ({
+          results: index === 0
+            ? [{ id: "image-9", filename: "image-9.png", prompt: "sunset", size: "1024x1024", created_at: "2026-01-15T00:00:00.000Z", is_public: 1, favorite: 1, byte_size: 2048 }]
+            : [{ value: index === 1 ? "model-a" : index === 2 ? "Default" : "1024x1024" }],
+          meta: {},
+          success: true,
+        }));
+      },
+    },
+  };
+
+  const result = await getGalleryPage(env, {
+    page: 1,
+    pageSize: 9,
+    ownerId: "owner-9",
+    prompt: "sun_set%",
+    model: "model-a",
+    preset: "Default",
+    size: "1024x1024",
+    dateFrom: "2026-01-01",
+    dateToExclusive: "2026-02-01",
+    favorite: true,
+  });
+
+  assert.equal(result.total_bytes, 2048);
+  assert.deepEqual(result.filter_options, {
+    models: ["model-a"],
+    presets: ["Default"],
+    sizes: ["1024x1024"],
+  });
+  assert.equal(result.images[0].favorite, true);
+  assert.match(statements[0].sql, /prompt COLLATE NOCASE LIKE \? ESCAPE/);
+  assert.match(statements[0].sql, /favorite = 1/);
+  assert.deepEqual(statements[0].args.slice(0, 2), ["owner-9", "%sun\\_set\\%%"]);
+});
+
+test("gallery favorite updates return the normalized entry", async () => {
+  const env = {
+    DB: {
+      prepare(sql) {
+        assert.match(sql, /UPDATE gallery SET favorite = \?/);
+        return {
+          bind(value, id) {
+            assert.deepEqual([value, id], [1, "image-10"]);
+            return {
+              async first() {
+                return { id, filename: "image-10.png", prompt: "test", size: "1024x1024", created_at: "2026-01-01T00:00:00.000Z", favorite: value, is_public: 1 };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+  const entry = await setGalleryFavorite(env, "image-10", true);
+  assert.equal(entry.favorite, true);
 });

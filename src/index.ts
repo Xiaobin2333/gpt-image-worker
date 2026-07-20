@@ -33,6 +33,7 @@ import {
   pruneOrphanImages,
   renewJobLease,
   saveJob,
+  setGalleryFavorite,
   tryClaimJob,
   updateGalleryEntry,
 } from "./storage";
@@ -1028,12 +1029,30 @@ app.get("/api/gallery", async (c) => {
   const page = Math.max(Number(url.searchParams.get("page") ?? "1") || 1, 1);
   const pageSize = Math.min(Math.max(Number(url.searchParams.get("page_size") ?? "9") || 9, 1), 100);
   const scope = url.searchParams.get("scope") ?? "default";
+  const prompt = (url.searchParams.get("prompt") ?? "").trim().slice(0, 500);
+  const model = (url.searchParams.get("model") ?? "").trim().slice(0, 200);
+  const preset = (url.searchParams.get("preset") ?? "").trim().slice(0, 200);
+  const size = (url.searchParams.get("size") ?? "").trim().slice(0, 100);
+  const dateFrom = parseGalleryDate(url.searchParams.get("date_from"));
+  const dateTo = parseGalleryDate(url.searchParams.get("date_to"));
   const admin = await isAdminRequest(c);
   const owner = getOwnerId(c);
   const includeAllPrivate = admin && scope === "all";
 
   const [result, limits] = await Promise.all([
-    getGalleryPage(c.env, { page, pageSize, includeAllPrivate, ownerId: owner }),
+    getGalleryPage(c.env, {
+      page,
+      pageSize,
+      includeAllPrivate,
+      ownerId: owner,
+      prompt: prompt || undefined,
+      model: model || undefined,
+      preset: preset || undefined,
+      size: size || undefined,
+      dateFrom: dateFrom ?? undefined,
+      dateToExclusive: dateTo ? nextGalleryDate(dateTo) : undefined,
+      favorite: url.searchParams.get("favorite") === "true",
+    }),
     cachedLimits(c),
   ]);
   const images = result.images.map((entry) => ({
@@ -1043,6 +1062,45 @@ app.get("/api/gallery", async (c) => {
   c.header("Cache-Control", "private, max-age=5");
   c.header("Vary", "Cookie");
   return c.json({ ...result, images });
+});
+
+function parseGalleryDate(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : value;
+}
+
+function nextGalleryDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+app.patch("/api/gallery/:id/favorite", async (c) => {
+  let body: { favorite?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return jsonError(400, "Request body must be JSON");
+  }
+  if (typeof body.favorite !== "boolean") return jsonError(400, "favorite must be a boolean");
+
+  const id = c.req.param("id");
+  const entry = await getEntry(c.env, id);
+  if (!entry) return jsonError(404, "Gallery entry not found");
+  const owner = getOwnerId(c);
+  const admin = await isAdminRequest(c);
+  if (!entry.is_public && entry.owner_id !== owner && !admin) {
+    return jsonError(404, "Gallery entry not found");
+  }
+
+  const updated = await setGalleryFavorite(c.env, id, body.favorite);
+  if (!updated) return jsonError(404, "Gallery entry not found");
+  const limits = await cachedLimits(c);
+  return c.json({
+    ...updated,
+    image_url: imageUrlFor(limits.r2_public_domain, updated),
+  });
 });
 
 app.delete("/api/gallery", async (c) => {
