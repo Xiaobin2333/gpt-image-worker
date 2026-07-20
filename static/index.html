@@ -932,12 +932,7 @@
                 <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.responsesModel">仅在 API 路径为 /v1/responses 时使用</p>
               </div>
             </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.responsesConcurrency">/v1/responses 并发</label>
-                <input type="number" id="settingsResponsesConcurrency" min="1" max="10" step="1" class="settings-input">
-                <p class="mt-1 text-[11px] text-zinc-600" data-i18n="settings.range.responsesConcurrency">范围 1 – 10，默认 3。仅 /v1/responses 拆分多次并发时生效</p>
-              </div>
+            <div>
               <div>
                 <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.promptHelperModel">提示词助手模型</label>
                 <input type="text" id="settingsPromptHelperModel" placeholder="gpt-4o-mini" class="settings-input font-mono">
@@ -3000,7 +2995,6 @@
           document.getElementById('settingsReferenceMaxMb').value = lim.value.reference_max_mb ?? 4;
           document.getElementById('settingsMaxFileSizeMb').value = lim.value.max_file_size_mb ?? 50;
           document.getElementById('settingsResponsesModel').value = lim.value.responses_model || '';
-          document.getElementById('settingsResponsesConcurrency').value = lim.value.responses_concurrency ?? 3;
           document.getElementById('settingsAccessSessionMin').value = lim.value.access_session_minutes ?? 180;
           document.getElementById('settingsAdminSessionMin').value = lim.value.admin_session_minutes ?? 180;
           document.getElementById('settingsPromptHelperModel').value = lim.value.prompt_helper_model || '';
@@ -3092,7 +3086,6 @@
       const limRefMb = clampSetting('settingsReferenceMaxMb', 1, 50, 4);
       const limMaxFile = clampSetting('settingsMaxFileSizeMb', 1, 100, 50);
       const limResponsesModel = document.getElementById('settingsResponsesModel').value.trim();
-      const limResponsesConcurrency = clampSetting('settingsResponsesConcurrency', 1, 10, 3);
       const limAccessMin = clampSetting('settingsAccessSessionMin', 5, 10080, 180);
       const limAdminMin = clampSetting('settingsAdminSessionMin', 5, 10080, 180);
       const limPromptHelperModel = document.getElementById('settingsPromptHelperModel').value.trim();
@@ -3171,7 +3164,6 @@
             reference_max_mb: limRefMb,
             max_file_size_mb: limMaxFile,
             responses_model: limResponsesModel,
-            responses_concurrency: limResponsesConcurrency,
             access_session_minutes: limAccessMin,
             admin_session_minutes: limAdminMin,
             prompt_helper_model: limPromptHelperModel,
@@ -3268,9 +3260,9 @@
       ));
       let ok = 0;
       results.forEach((r, idx) => {
+        abortActiveGeneration(ids[idx]);
         if (r.status === 'fulfilled') {
           ok++;
-          abortActiveGeneration(ids[idx]);
         }
       });
 
@@ -3813,6 +3805,7 @@
         if (dlAllBtn) dlAllBtn.classList.add('hidden');
         previewImages = [];
         previewActiveIndex = 0;
+        previewBaseData = null;
       } else {
         previewLoading.classList.add('hidden');
       }
@@ -4140,13 +4133,14 @@
 
     function waitForPreviewImage(img, url) {
       return new Promise((resolve, reject) => {
+        const loader = new Image();
         let settled = false;
         const finish = (error) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          img.onload = null;
-          img.onerror = null;
+          loader.onload = null;
+          loader.onerror = null;
           if (error) reject(error);
           else resolve();
         };
@@ -4157,9 +4151,10 @@
           finish(error);
         };
         const timer = setTimeout(() => loadError(true), PREVIEW_IMAGE_LOAD_TIMEOUT_MS);
-        img.onload = () => finish();
-        img.onerror = () => loadError(false);
+        loader.onload = () => finish();
+        loader.onerror = () => loadError(false);
         img.src = url;
+        loader.src = url;
       });
     }
 
@@ -4197,7 +4192,9 @@
       updatePreviewTime('Elapsed');
       document.getElementById('previewSection').classList.remove('hidden');
 
-      await waitForPreviewImage(previewImg, primary.image_url);
+      waitForPreviewImage(previewImg, primary.image_url).catch((error) => {
+        console.error('Preview image failed to load:', error);
+      });
       previewImg.alt = data.prompt || '';
       previewImg.className = 'zoom-img';
       previewImg.classList.remove('hidden');
@@ -4536,7 +4533,7 @@
         setLoading(false);
       } catch (e) {
         if (run && activeGenerationRun !== run) return;
-        if (!e?.previewLoadTimedOut && run?.jobId) clearActiveJob(run.jobId);
+        if (run?.jobId) clearActiveJob(run.jobId);
         stopElapsedTicker();
         setLoading(false);
         updatePreviewTime(t('preview.elapsed'));
@@ -4577,7 +4574,7 @@
         setLoading(false);
       } catch (e) {
         if (activeGenerationRun !== run) return;
-        if (!e?.previewLoadTimedOut) clearActiveJob(active.id);
+        clearActiveJob(active.id);
         stopElapsedTicker();
         setLoading(false);
         updatePreviewTime(t('preview.elapsed'));

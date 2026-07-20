@@ -23,7 +23,7 @@ function inlineFunctionSource(name) {
 }
 
 test("cancelled jobs abort the matching browser generation run", () => {
-  assert.match(html, /results\.forEach\(\(r, idx\)[\s\S]*abortActiveGeneration\(ids\[idx\]\)/);
+  assert.match(html, /results\.forEach\(\(r, idx\) => \{\s*abortActiveGeneration\(ids\[idx\]\);\s*if \(r\.status === 'fulfilled'\)/);
   assert.match(html, /run\.controller\.abort\(generationError\('cancelled'/);
   assert.match(html, /if \(ownsStoredJob\) clearActiveJob\(jobId\)/);
   assert.match(html, /event\.key !== ACTIVE_JOB_KEY[\s\S]*abortActiveGeneration\(removed\.id\)/);
@@ -59,12 +59,15 @@ test("mask requests normalize references and support Responses mode", () => {
   assert.match(html, /referenceMaskDataUrl = null;\s*referenceImages = \[\{ name: meta\.filename, dataUrl \}\]/);
 });
 
-test("preview loading distinguishes retryable timeouts from hard failures", () => {
+test("preview loading never keeps a completed browser job active", () => {
   assert.match(html, /const PREVIEW_IMAGE_LOAD_TIMEOUT_MS = 30_000/);
   assert.match(html, /setTimeout\(\(\) => loadError\(true\), PREVIEW_IMAGE_LOAD_TIMEOUT_MS\)/);
-  assert.match(html, /img\.onerror = \(\) => loadError\(false\)/);
+  assert.match(html, /const loader = new Image\(\)[\s\S]*loader\.onerror = \(\) => loadError\(false\)[\s\S]*img\.src = url;\s*loader\.src = url/);
+  assert.match(html, /waitForPreviewImage\(previewImg, primary\.image_url\)\.catch/);
+  assert.doesNotMatch(html, /await waitForPreviewImage\(previewImg, primary\.image_url\)/);
   assert.match(html, /await finishGeneratedImage\(result\);\s*clearActiveJob\(submitted\.job_id\)/);
-  assert.match(html, /if \(!e\?\.previewLoadTimedOut && run\?\.jobId\) clearActiveJob\(run\.jobId\)/);
+  assert.match(html, /if \(run\?\.jobId\) clearActiveJob\(run\.jobId\)/);
+  assert.doesNotMatch(html, /if \(!e\?\.previewLoadTimedOut/);
 });
 
 test("SSE image events render completed images before the terminal result", () => {
@@ -81,6 +84,7 @@ test("generation quantity defaults to 20 images", () => {
   assert.match(html, /generation_max_n:\s*20/);
   assert.match(html, /Number\(activeLimits\.generation_max_n\) \|\| 20/);
   assert.match(html, /clampSetting\('settingsGenerationMaxN', 1, 20, 20\)/);
+  assert.doesNotMatch(html, /id="settingsResponsesConcurrency"/);
 });
 
 test("Responses mode keeps image parameters and references editable", () => {
