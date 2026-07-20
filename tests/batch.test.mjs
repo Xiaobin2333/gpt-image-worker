@@ -28,9 +28,9 @@ test("runSettledBatch reports every failure when the whole batch fails", async (
   assert.deepEqual(batch.errors.map((item) => item.index), [0, 1, 2]);
 });
 
-test("sequential image edits return earlier successes after a later failure", async () => {
+test("sequential image edits continue after individual failures", async () => {
   const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
-  assert.match(proxy, /if \(entries\.length > 0\) \{[\s\S]*generation batch partially failed[\s\S]*break;/);
+  assert.match(proxy, /if \(useSingleImagePerCall\) \{[\s\S]*image edit attempt failed, continuing batch[\s\S]*continue;/);
   assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
 });
 

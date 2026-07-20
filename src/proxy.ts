@@ -559,6 +559,15 @@ export async function callImageGeneration(
           ensureNotAborted();
           continue;
         }
+        if (useSingleImagePerCall) {
+          console.warn("image edit attempt failed, continuing batch", {
+            requested: targetCount,
+            succeeded: entries.length,
+            failed_attempt: attempt,
+            message: msg,
+          });
+          continue;
+        }
         if (entries.length > 0) {
           console.warn("generation batch partially failed", {
             requested: targetCount,
