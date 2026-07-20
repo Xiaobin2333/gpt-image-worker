@@ -13,13 +13,17 @@ function loadInlineFunction(name) {
 test("cancelled jobs abort the matching browser generation run", () => {
   assert.match(html, /results\.forEach\(\(r, idx\)[\s\S]*abortActiveGeneration\(ids\[idx\]\)/);
   assert.match(html, /run\.controller\.abort\(generationError\('cancelled'/);
-  assert.match(html, /if \(ownsStoredJob\) clearActiveJob\(\)/);
+  assert.match(html, /if \(ownsStoredJob\) clearActiveJob\(jobId\)/);
+  assert.match(html, /event\.key !== ACTIVE_JOB_KEY[\s\S]*abortActiveGeneration\(removed\.id\)/);
   assert.match(html, /stopElapsedTicker\(\);[\s\S]*setLoading\(false\)/);
 });
 
-test("terminal SSE errors do not fall back to polling", () => {
+test("SSE transport failures use structured polling fallback", () => {
   assert.match(html, /generationError\(data\.detail \|\| t\('generate\.errDefault'\), \{ terminal: true \}\)/);
   assert.match(html, /if \(e\?\.jobTerminal \|\| e\?\.generationCancelled \|\| signal\?\.aborted\) throw e/);
+  assert.match(html, /err\.generationTransport = !!options\.transport/);
+  assert.match(html, /EventSource closed'[\s\S]*\{ transport: true \}/);
+  assert.match(html, /if \(!e\?\.generationTransport\) throw e/);
 });
 
 test("polling and sleeps share the active generation abort signal", () => {
@@ -42,9 +46,16 @@ test("mask requests normalize references and reject Responses mode", () => {
   assert.match(html, /referenceMaskDataUrl = null;\s*referenceImages = \[\{ name: meta\.filename, dataUrl \}\]/);
 });
 
-test("preview loading has a deadline and clears recovery state after rendering", () => {
+test("preview loading distinguishes retryable timeouts from hard failures", () => {
   assert.match(html, /const PREVIEW_IMAGE_LOAD_TIMEOUT_MS = 30_000/);
-  assert.match(html, /setTimeout\(loadError, PREVIEW_IMAGE_LOAD_TIMEOUT_MS\)/);
-  assert.match(html, /await showGeneratedImage\(result\);\s*clearActiveJob\(\)/);
-  assert.match(html, /if \(!e\?\.previewLoadFailed\) clearActiveJob\(\)/);
+  assert.match(html, /setTimeout\(\(\) => loadError\(true\), PREVIEW_IMAGE_LOAD_TIMEOUT_MS\)/);
+  assert.match(html, /img\.onerror = \(\) => loadError\(false\)/);
+  assert.match(html, /await showGeneratedImage\(result\);\s*clearActiveJob\(submitted\.job_id\)/);
+  assert.match(html, /if \(!e\?\.previewLoadTimedOut && run\?\.jobId\) clearActiveJob\(run\.jobId\)/);
+});
+
+test("active job cleanup is compare-and-delete and gallery refresh is background work", () => {
+  assert.match(html, /function clearActiveJob\(expectedJobId\)[\s\S]*stored\?\.id !== expectedJobId[\s\S]*removeItem\(ACTIVE_JOB_KEY\)/);
+  assert.match(html, /loadGallery\(1, \{ throwOnError: true \}\)\.catch/);
+  assert.doesNotMatch(html, /await loadGallery\(1, \{ throwOnError: true \}\)/);
 });
