@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { runSettledBatch } from "../src/batch.ts";
+import { runSettledBatch, runSettledBatchWithRetries } from "../src/batch.ts";
 
 const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
 const worker = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -46,6 +46,43 @@ test("runSettledBatch reports every failure when the whole batch fails", async (
 
   assert.deepEqual(batch.results, []);
   assert.deepEqual(batch.errors.map((item) => item.index), [0, 1, 2]);
+});
+
+test("runSettledBatchWithRetries retries only failed slots", async () => {
+  const calls = [];
+  const batch = await runSettledBatchWithRetries(
+    5,
+    5,
+    async (index, attempt) => {
+      calls.push([index, attempt]);
+      if ((index === 1 || index === 4) && attempt === 1) throw new Error("transient");
+      return `image-${index}`;
+    },
+    { maxRetries: 2, shouldRetry: () => true },
+  );
+
+  assert.deepEqual(batch.results, ["image-0", "image-1", "image-2", "image-3", "image-4"]);
+  assert.deepEqual(batch.errors, []);
+  assert.deepEqual(calls.filter(([, attempt]) => attempt === 2).map(([index]) => index), [1, 4]);
+});
+
+test("runSettledBatchWithRetries keeps permanent failures terminal", async () => {
+  let calls = 0;
+  const batch = await runSettledBatchWithRetries(
+    2,
+    2,
+    async (index) => {
+      calls++;
+      if (index === 1) throw new Error("upstream 400");
+      return "image-0";
+    },
+    { maxRetries: 2, shouldRetry: (error) => !String(error).includes("400") },
+  );
+
+  assert.equal(calls, 2);
+  assert.deepEqual(batch.results, ["image-0"]);
+  assert.equal(batch.errors.length, 1);
+  assert.equal(batch.errors[0].index, 1);
 });
 
 test("sequential image edits continue after individual failures", async () => {
@@ -129,9 +166,14 @@ test("upstream JSON parsing does not depend on the Content-Type header", () => {
 });
 
 test("streamed jobs publish each committed image as an SSE image event", () => {
-  assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*options\.onImage\(entry, publishedIds\.size, targetCount\)/);
+  assert.match(proxy, /else \{[\s\S]*addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*if \(options\.onImage\)/);
   assert.match(proxy, /deletePendingImages\(persisted\.results\.filter\(\(entry\) => !publishedIds\.has\(entry\.id\)\)\)/);
   assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed\) => emitResultImages\(result, completed\)/);
+});
+
+test("parallel jobs retry missing images and reject incomplete terminal results", () => {
+  assert.match(proxy, /runSettledBatchWithRetries\([\s\S]*maxRetries: 2[\s\S]*isRetryableParallelError/);
+  assert.match(proxy, /Generated \$\{entries\.length\} of \$\{targetCount\} images; \$\{batch\.errors\.length\} calls failed/);
 });
 
 test("job image records share one guarded gallery batch", async () => {

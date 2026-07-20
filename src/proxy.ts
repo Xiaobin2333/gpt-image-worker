@@ -1,7 +1,7 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
 import { addGalleryEntriesForJob, addToGallery, addToGalleryForJob, deleteImage, deleteImages, generateImageId, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
-import { runSettledBatch } from "./batch";
+import { runSettledBatch, runSettledBatchWithRetries } from "./batch";
 
 interface FormatInfo {
   outputFormat: "png" | "jpeg" | "webp";
@@ -394,6 +394,17 @@ function requiresSingleImageCalls(payload: GenerateRequestBody): boolean {
   return !!payload.mask || /^gpt-image-2(?:$|[-.:/_])/i.test(payload.model.trim());
 }
 
+function isRetryableParallelError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const status = /(?:Upstream API error|Upstream returned non-JSON) \((\d{3})\)/.exec(message)?.[1];
+  if (status) {
+    const code = Number(status);
+    return code === 408 || code === 409 || code === 425 || code === 429 || code >= 500;
+  }
+  if (/Image too large|invalid base64|malformed data URL/i.test(message)) return false;
+  return true;
+}
+
 export interface CallImageGenerationOptions {
   jobId?: string;
   existingEntries?: GalleryEntry[];
@@ -506,7 +517,7 @@ export async function callImageGeneration(
         await deleteImage(env, filename).catch(() => {});
         throw err;
       }
-    } else if (options.onImage) {
+    } else {
       if (!options.claimToken) {
         await deleteImage(env, filename).catch(() => {});
         throw new Error("Generation claim token missing");
@@ -517,14 +528,16 @@ export async function callImageGeneration(
         throw new Error("Generation job lease lost");
       }
       publishedIds.add(entry.id);
-      try {
-        await options.onImage(entry, publishedIds.size, targetCount);
-      } catch (error) {
-        console.error("generation image progress callback failed", {
-          jobId: options.jobId,
-          imageId: entry.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      if (options.onImage) {
+        try {
+          await options.onImage(entry, publishedIds.size, targetCount);
+        } catch (error) {
+          console.error("generation image progress callback failed", {
+            jobId: options.jobId,
+            imageId: entry.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
     return entry;
@@ -598,15 +611,35 @@ export async function callImageGeneration(
 
   const runParallelSingleCalls = async (remaining: number, concurrency: number, label: string) => {
     let fatalError: unknown;
-    const batch = await runSettledBatch(remaining, concurrency, async (index) => {
-      if (fatalError) throw fatalError;
-      try {
-        return await runOneCall(1, index + 1);
-      } catch (error) {
-        if (isFatalJobError(error)) fatalError = error;
-        throw error;
-      }
-    });
+    const batch = await runSettledBatchWithRetries(
+      remaining,
+      concurrency,
+      async (index, attempt) => {
+        if (fatalError) throw fatalError;
+        try {
+          return await runOneCall(1, index + 1 + ((attempt - 1) * remaining));
+        } catch (error) {
+          if (isFatalJobError(error)) fatalError = error;
+          throw error;
+        }
+      },
+      {
+        maxRetries: 2,
+        shouldRetry: (error) => !fatalError && isRetryableParallelError(error),
+        beforeRetry: async (errors, nextAttempt) => {
+          console.warn(`${label} retrying failed image calls`, {
+            next_attempt: nextAttempt,
+            retry_count: errors.length,
+            errors: errors.slice(0, 3).map(({ index, error }) => ({
+              index,
+              message: error instanceof Error ? error.message : String(error),
+            })),
+          });
+          await new Promise((resolve) => setTimeout(resolve, nextAttempt === 2 ? 800 : 1600));
+          ensureNotAborted();
+        },
+      },
+    );
     for (const produced of batch.results) {
       for (const entry of produced) {
         if (entries.length < targetCount) entries.push(entry);
@@ -628,6 +661,8 @@ export async function callImageGeneration(
       throw fatal.error;
     }
     if (entries.length === 0) throw batch.errors[0]!.error;
+    const messages = batch.errors.slice(0, 3).map(({ error }) => error instanceof Error ? error.message : String(error));
+    throw new Error(`Generated ${entries.length} of ${targetCount} images; ${batch.errors.length} calls failed: ${messages.join("; ")}`);
   };
 
   const parallelImages = apiPath === "/v1/images/generations"
