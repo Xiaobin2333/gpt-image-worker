@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { runSettledBatch } from "../src/batch.ts";
@@ -25,4 +26,10 @@ test("runSettledBatch reports every failure when the whole batch fails", async (
 
   assert.deepEqual(batch.results, []);
   assert.deepEqual(batch.errors.map((item) => item.index), [0, 1, 2]);
+});
+
+test("sequential image edits return earlier successes after a later failure", async () => {
+  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
+  assert.match(proxy, /if \(entries\.length > 0\) \{[\s\S]*generation batch partially failed[\s\S]*break;/);
+  assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
 });

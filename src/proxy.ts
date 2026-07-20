@@ -515,6 +515,15 @@ export async function callImageGeneration(
           await ensureActive();
           continue;
         }
+        if (entries.length > 0) {
+          console.warn("generation batch partially failed", {
+            requested: targetCount,
+            succeeded: entries.length,
+            failed_attempt: attempt,
+            message: msg,
+          });
+          break;
+        }
         throw e;
       }
     }
