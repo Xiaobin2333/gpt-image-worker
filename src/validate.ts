@@ -40,6 +40,16 @@ const QUALITIES = new Set(["auto", "low", "medium", "high"]);
 const FORMATS = new Set(["png", "jpeg", "webp"]);
 const RESPONSE_FORMATS = new Set(["b64_json", "url", "none"]);
 
+function validateReferenceDataUrl(value: string): void {
+  const match = /^data:image\/(?:png|jpeg|webp);base64,(.+)$/i.exec(value);
+  if (!match?.[1]) throw new ValidationError("reference image must be a PNG, JPEG, or WebP data URL");
+  try {
+    atob(match[1]);
+  } catch {
+    throw new ValidationError("reference image contains invalid base64 data");
+  }
+}
+
 interface PngInfo {
   width: number;
   height: number;
@@ -147,6 +157,7 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
       if (ref.length > perImageMaxChars) {
         throw new ValidationError(`reference image exceeds ${Math.round(limits.referenceMaxBytes / (1024 * 1024))}MB`);
       }
+      validateReferenceDataUrl(ref);
       totalChars += ref.length;
     }
     if (totalChars > totalMaxChars) {

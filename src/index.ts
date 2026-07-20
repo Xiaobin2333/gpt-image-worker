@@ -620,7 +620,6 @@ type JobRunContext = {
   max_file_size_mb: number;
   r2_public_domain: string;
   responses_model: string;
-  responses_concurrency: number;
 };
 
 const JOB_LEASE_RENEW_MS = 45_000;
@@ -662,15 +661,11 @@ function startJobExecutionMonitor(
 
 async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
   if (input?.snapshot) {
-    const limits = input.snapshot.responses_concurrency === undefined || !input.snapshot.responses_model
-      ? await loadRuntimeLimits(env)
-      : null;
-    const responsesConcurrency = input.snapshot.responses_concurrency ?? limits!.responses_concurrency;
+    const limits = !input.snapshot.responses_model ? await loadRuntimeLimits(env) : null;
     const responsesModel = input.snapshot.responses_model || limits!.responses_model;
     return {
       ...input.snapshot,
       responses_model: responsesModel,
-      responses_concurrency: responsesConcurrency,
     };
   }
   const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
@@ -683,7 +678,6 @@ async function resolveJobContext(env: Bindings, input: GenerateJobInput | null):
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
     responses_model: limits.responses_model,
-    responses_concurrency: limits.responses_concurrency,
   };
 }
 
@@ -766,7 +760,6 @@ async function executeClaimedJob(
         existingEntries,
         maxFileSizeMb: runContext.max_file_size_mb,
         apiPresetName: runContext.api_preset_name || undefined,
-        responsesConcurrency: runContext.responses_concurrency,
         responsesModel: runContext.responses_model,
         claimToken,
         onImage: onImage
@@ -898,7 +891,6 @@ app.post("/api/generate", async (c) => {
     max_file_size_mb: limits.max_file_size_mb,
     r2_public_domain: limits.r2_public_domain,
     responses_model: limits.responses_model,
-    responses_concurrency: limits.responses_concurrency,
   };
   const persistedInput = await offloadLargePayloadAssets(c.env, jobId, { payload, owner_id: owner, snapshot });
   await saveJob(c.env, initial, persistedInput);
@@ -1419,7 +1411,8 @@ app.post("/api/admin/test-api", async (c) => {
         const output = Array.isArray(j?.output) ? j.output : [];
         hasImage = output.some((item: unknown) => item && typeof item === "object"
           && (item as { type?: unknown }).type === "image_generation_call"
-          && (typeof (item as { result?: unknown }).result === "string" || Array.isArray((item as { result?: unknown }).result)));
+          && (typeof (item as { result?: unknown }).result === "string"
+            || (Array.isArray((item as { result?: unknown }).result) && (item as { result: unknown[] }).result.length > 0)));
       } else {
         const data = Array.isArray(j?.data) ? j.data : [];
         hasImage = data.some((d: unknown) => d && typeof d === "object" && (typeof (d as { b64_json?: unknown }).b64_json === "string" || typeof (d as { url?: unknown }).url === "string"));

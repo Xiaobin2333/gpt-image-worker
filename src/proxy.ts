@@ -4,18 +4,37 @@ import { loadRuntimeLimits } from "./settings";
 import { runSettledBatch } from "./batch";
 
 interface FormatInfo {
+  outputFormat: "png" | "jpeg" | "webp";
   extension: string;
   mediaType: string;
 }
 
 const FORMAT_INFO: Record<string, FormatInfo> = {
-  png: { extension: "png", mediaType: "image/png" },
-  jpeg: { extension: "jpg", mediaType: "image/jpeg" },
-  webp: { extension: "webp", mediaType: "image/webp" },
+  png: { outputFormat: "png", extension: "png", mediaType: "image/png" },
+  jpeg: { outputFormat: "jpeg", extension: "jpg", mediaType: "image/jpeg" },
+  webp: { outputFormat: "webp", extension: "webp", mediaType: "image/webp" },
 };
 
 function formatInfo(fmt: string): FormatInfo {
   return FORMAT_INFO[fmt] ?? FORMAT_INFO.png!;
+}
+
+function detectFormatInfo(buffer: ArrayBuffer): FormatInfo | null {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length >= 8
+      && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+      && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return FORMAT_INFO.png!;
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return FORMAT_INFO.jpeg!;
+  }
+  if (bytes.length >= 12
+      && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+      && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return FORMAT_INFO.webp!;
+  }
+  return null;
 }
 
 function readU32BE(view: DataView, offset: number): number {
@@ -188,12 +207,41 @@ interface DataUrl {
   bytes: ArrayBuffer;
 }
 
+interface PreparedEditAsset {
+  blob: Blob;
+  filename: string;
+}
+
+interface PreparedEditAssets {
+  references: PreparedEditAsset[];
+  mask?: PreparedEditAsset;
+}
+
 function parseDataUrl(dataUrl: string): DataUrl {
   const m = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/i.exec(dataUrl);
   if (!m) throw new Error("reference_images must be data URLs (data:<mime>;base64,<...>)");
   const mediaType = m[1]!;
   const base64 = m[2]!;
   return { mediaType, base64, bytes: decodeBase64(base64) };
+}
+
+function prepareEditAssets(payload: GenerateRequestBody): PreparedEditAssets {
+  const references = (payload.reference_images ?? []).map((dataUrl, index) => {
+    const parsed = parseDataUrl(dataUrl);
+    const ext = (parsed.mediaType.split("/")[1] ?? "png").toLowerCase();
+    return {
+      blob: new Blob([parsed.bytes], { type: parsed.mediaType }),
+      filename: `reference-${index}.${ext}`,
+    };
+  });
+  const mask = payload.mask
+    ? (() => {
+        const parsed = parseDataUrl(payload.mask!);
+        const ext = (parsed.mediaType.split("/")[1] ?? "png").toLowerCase();
+        return { blob: new Blob([parsed.bytes], { type: parsed.mediaType }), filename: `mask.${ext}` };
+      })()
+    : undefined;
+  return { references, mask };
 }
 
 export function buildImagesGenerationPayload(payload: GenerateRequestBody): Record<string, unknown> {
@@ -228,7 +276,6 @@ export function buildResponsesPayload(
     tool.output_compression = payload.output_compression;
   }
   if (payload.mask) {
-    parseDataUrl(payload.mask);
     tool.input_image_mask = { image_url: payload.mask };
   }
   const references = payload.reference_images ?? [];
@@ -237,10 +284,7 @@ export function buildResponsesPayload(
         role: "user",
         content: [
           { type: "input_text", text: payload.prompt },
-          ...references.map((imageUrl) => {
-            parseDataUrl(imageUrl);
-            return { type: "input_image", image_url: imageUrl };
-          }),
+          ...references.map((imageUrl) => ({ type: "input_image", image_url: imageUrl })),
         ],
       }]
     : payload.prompt;
@@ -279,6 +323,7 @@ async function callImagesEdits(
   apiUrl: string,
   apiKey: string,
   payload: GenerateRequestBody,
+  assets: PreparedEditAssets,
   signal?: AbortSignal,
 ): Promise<Response> {
   const form = new FormData();
@@ -294,18 +339,11 @@ async function callImagesEdits(
   if (payload.output_format !== "png" && payload.output_compression !== null && payload.output_compression !== undefined) {
     form.append("output_compression", String(payload.output_compression));
   }
-  const refs = payload.reference_images ?? [];
-  for (let i = 0; i < refs.length; i++) {
-    const parsed = parseDataUrl(refs[i]!);
-    const blob = new Blob([parsed.bytes], { type: parsed.mediaType });
-    const ext = (parsed.mediaType.split("/")[1] ?? "png").toLowerCase();
-    form.append("image[]", blob, `reference-${i}.${ext}`);
+  for (const reference of assets.references) {
+    form.append("image[]", reference.blob, reference.filename);
   }
-  if (payload.mask) {
-    const maskParsed = parseDataUrl(payload.mask);
-    const maskBlob = new Blob([maskParsed.bytes], { type: maskParsed.mediaType });
-    const maskExt = (maskParsed.mediaType.split("/")[1] ?? "png").toLowerCase();
-    form.append("mask", maskBlob, `mask.${maskExt}`);
+  if (assets.mask) {
+    form.append("mask", assets.mask.blob, assets.mask.filename);
   }
   const editsUrl = `${apiUrl}/v1/images/edits`;
   try {
@@ -330,10 +368,6 @@ async function callImagesEdits(
 
 async function readUpstreamJson(resp: Response): Promise<{ status: number; json?: Record<string, unknown>; text: string }> {
   const text = await resp.text();
-  const ct = resp.headers.get("Content-Type") ?? "";
-  if (!ct.includes("application/json")) {
-    return { status: resp.status, text };
-  }
   try {
     return { status: resp.status, json: JSON.parse(text) as Record<string, unknown>, text };
   } catch {
@@ -365,7 +399,6 @@ export interface CallImageGenerationOptions {
   existingEntries?: GalleryEntry[];
   maxFileSizeMb?: number;
   apiPresetName?: string;
-  responsesConcurrency?: number;
   responsesModel?: string;
   claimToken?: string;
   onImage?: (entry: GalleryEntry, completed: number, total: number) => void | Promise<void>;
@@ -382,6 +415,9 @@ export async function callImageGeneration(
   const apiPath: ApiPath = settings.api_path;
   const hasReferences = !!payload.reference_images && payload.reference_images.length > 0;
   const fmt = formatInfo(payload.output_format);
+  const editAssets = apiPath === "/v1/images/generations" && hasReferences
+    ? prepareEditAssets(payload)
+    : null;
   const maxBytes = (options.maxFileSizeMb ?? (await loadRuntimeLimits(env)).max_file_size_mb) * 1024 * 1024;
 
   const targetCount = Math.max(1, payload.n);
@@ -431,8 +467,9 @@ export async function callImageGeneration(
       throw new Error(`Image too large: ${bytes.byteLength} bytes (max ${maxBytes})`);
     }
     const id = generateImageId();
-    const filename = `${id}.${fmt.extension}`;
-    await saveImage(env, filename, bytes, fmt.mediaType);
+    const actualFormat = detectFormatInfo(bytes) ?? fmt;
+    const filename = `${id}.${actualFormat.extension}`;
+    await saveImage(env, filename, bytes, actualFormat.mediaType);
     try {
       ensureNotAborted();
     } catch (err) {
@@ -448,8 +485,8 @@ export async function callImageGeneration(
       created_at: new Date().toISOString(),
       model: payload.model,
       quality: payload.quality,
-      output_format: payload.output_format,
-      output_compression: payload.output_compression ?? null,
+      output_format: actualFormat.outputFormat,
+      output_compression: actualFormat.outputFormat === "png" ? null : payload.output_compression ?? null,
       response_format: payload.response_format,
       n: payload.n,
       api_path: apiPath,
@@ -499,7 +536,7 @@ export async function callImageGeneration(
     let resp: Response;
     if (apiPath === "/v1/images/generations") {
       if (hasReferences) {
-        resp = await callImagesEdits(settings.api_url, settings.api_key, callPayload, signal);
+        resp = await callImagesEdits(settings.api_url, settings.api_key, callPayload, editAssets!, signal);
       } else {
         resp = await postJson(
           `${settings.api_url}/v1/images/generations`,
@@ -551,7 +588,7 @@ export async function callImageGeneration(
       });
       const fatal = persisted.errors.find(({ error }) => isFatalJobError(error));
       if (fatal) {
-        await deletePendingImages(persisted.results);
+        await deletePendingImages(persisted.results.filter((entry) => !publishedIds.has(entry.id)));
         throw fatal.error;
       }
       if (persisted.results.length === 0) throw persisted.errors[0]!.error;
@@ -594,7 +631,6 @@ export async function callImageGeneration(
   };
 
   const parallelImages = apiPath === "/v1/images/generations"
-    && !hasReferences
     && requiresSingleImageCalls(payload);
   if (apiPath === "/v1/responses" || parallelImages) {
     const remaining = targetCount - entries.length;

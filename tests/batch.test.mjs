@@ -110,8 +110,27 @@ test("Responses API uses an image_generation tool payload", () => {
   assert.equal("n" in withReferences.tools[0], false);
 });
 
+test("single-image paths use the requested quantity as their concurrency", () => {
+  assert.match(proxy, /if \(apiPath === "\/v1\/responses" \|\| parallelImages\)[\s\S]*runParallelSingleCalls\(remaining, remaining/);
+  assert.match(proxy, /const parallelImages = apiPath === "\/v1\/images\/generations"\s*&& requiresSingleImageCalls\(payload\)/);
+  assert.doesNotMatch(proxy, /responsesConcurrency/);
+});
+
+test("parallel edits reuse decoded inputs and save the detected output format", () => {
+  assert.match(proxy, /const editAssets = apiPath === "\/v1\/images\/generations" && hasReferences[\s\S]*prepareEditAssets\(payload\)/);
+  assert.match(proxy, /callImagesEdits\(settings\.api_url, settings\.api_key, callPayload, editAssets!, signal\)/);
+  assert.match(proxy, /const actualFormat = detectFormatInfo\(bytes\) \?\? fmt[\s\S]*saveImage\(env, filename, bytes, actualFormat\.mediaType\)/);
+  assert.doesNotMatch(proxy.match(/export function buildResponsesPayload\([\s\S]*?^\}/m)?.[0] ?? "", /parseDataUrl/);
+});
+
+test("upstream JSON parsing does not depend on the Content-Type header", () => {
+  assert.match(proxy, /async function readUpstreamJson[\s\S]*const text = await resp\.text\(\);[\s\S]*JSON\.parse\(text\)/);
+  assert.doesNotMatch(proxy, /if \(!ct\.includes\("application\/json"\)\)/);
+});
+
 test("streamed jobs publish each committed image as an SSE image event", () => {
   assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*options\.onImage\(entry, publishedIds\.size, targetCount\)/);
+  assert.match(proxy, /deletePendingImages\(persisted\.results\.filter\(\(entry\) => !publishedIds\.has\(entry\.id\)\)\)/);
   assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed, total\) => sendEvent\("image", \{ result, completed, total \}\)/);
 });
 

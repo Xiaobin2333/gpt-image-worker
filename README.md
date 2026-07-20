@@ -18,7 +18,7 @@ A Cloudflare Workers rewrite of a GPT-compatible image generation panel.
 ## 🚀 性能与体验
 
 - **同步 + 异步双轨**：1–3 分钟级生成走 SSE（Server-Sent Events）实时推送 + Cron 兜底，浏览器关闭也能恢复任务
-- **并行生成**：`/v1/responses` 路径下 `n>1` 自动并发 3 路；`/v1/images/generations` 单次批量请求；上游若误把 `n` 截成 1 会自动补齐
+- **并行生成**：`/v1/responses` 与需要单图拆分的 Images 请求按数量 `n` 并行执行，单次最多 20 张；每张完成后立即写入图库并推送到预览
 - **任务去重**：D1 存 `produced_ids`，断网重连不会重复生成已产出的图像
 - **预览 / Lightbox 缩放**：滚轮 / 双击 / +−/1:1 / 拖拽 / 触摸捏合 全支持
 - **公开图片绕过 Worker**：配置 `R2_PUBLIC_DOMAIN` 后，公开图直接由 R2 自定义域服务，节省 Worker Free 套餐请求数
