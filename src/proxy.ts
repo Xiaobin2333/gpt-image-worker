@@ -1,6 +1,7 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
 import { addToGallery, appendProducedId, deleteGalleryEntry, deleteImage, generateImageId, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
+import { runSettledBatch } from "./batch";
 
 interface FormatInfo {
   extension: string;
@@ -469,19 +470,24 @@ export async function callImageGeneration(
     const remaining = targetCount - entries.length;
     const cap = Math.max(1, Math.min(10, Math.floor(options.responsesConcurrency ?? 3)));
     const concurrency = Math.min(remaining, cap);
-    const queue = Array.from({ length: remaining }, (_, i) => i);
-    let attempt = 0;
-    const workers = Array.from({ length: concurrency }, async () => {
-      while (queue.length > 0) {
-        queue.shift();
-        attempt += 1;
-        const produced = await runOneCall(1, attempt);
-        for (const e of produced) {
-          if (entries.length < targetCount) entries.push(e);
-        }
+    const batch = await runSettledBatch(remaining, concurrency, (index) => runOneCall(1, index + 1));
+    for (const produced of batch.results) {
+      for (const entry of produced) {
+        if (entries.length < targetCount) entries.push(entry);
       }
-    });
-    await Promise.all(workers);
+    }
+    if (batch.errors.length > 0) {
+      console.warn("responses batch partially failed", {
+        requested: remaining,
+        succeeded: batch.results.length,
+        failed: batch.errors.length,
+        errors: batch.errors.slice(0, 3).map(({ index, error }) => ({
+          attempt: index + 1,
+          message: error instanceof Error ? error.message : String(error),
+        })),
+      });
+      if (entries.length === 0) throw batch.errors[0]!.error;
+    }
   } else {
     let attempt = 0;
     const maxTransientRetries = 2;
