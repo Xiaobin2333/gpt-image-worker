@@ -111,8 +111,11 @@ export function parseGenerateBody(input: unknown, limits: ParseLimits): Generate
     if (!reference_images || reference_images.length === 0) {
       throw new ValidationError("mask requires at least one reference image");
     }
-    if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(raw.mask)) {
-      throw new ValidationError("mask must be an image data URL");
+    if (!/^data:image\/png;base64,/i.test(raw.mask)) {
+      throw new ValidationError("mask must be a PNG data URL with an alpha channel");
+    }
+    if (!/^data:image\/png;base64,/i.test(reference_images[0]!)) {
+      throw new ValidationError("the first reference image must be PNG when using a mask");
     }
     const perImageMaxChars = Math.ceil(limits.referenceMaxBytes * 4 / 3) + 64;
     if (raw.mask.length > perImageMaxChars) {

@@ -1604,6 +1604,7 @@
         'generate.errTimeout': '生成超时（超过 10 分钟）',
         'generate.errStuck': '后台任务停滞，已自动放弃。请检查上游 API 是否可达',
         'generate.galleryRefreshFail': '图像已生成，但图库刷新失败',
+        'generate.responsesEditUnsupported': '参考图和蒙版编辑需要切换到 Images API',
         'quality.auto': '自动',
         'quality.low': '低',
         'quality.medium': '中',
@@ -1762,6 +1763,7 @@
         'mask.coverage': '覆盖：{pct}%',
         'mask.saved': '蒙版已保存',
         'mask.removed': '蒙版已移除',
+        'mask.responsesUnsupported': '蒙版编辑需要切换到 Images API',
         'settings.promptHelperModel': '提示词助手模型',
         'settings.range.promptHelperModel': '用于「提示词助手」调用 /v1/chat/completions 的模型名',
         'settings.test.connect': '测试连接',
@@ -1941,6 +1943,7 @@
         'generate.errTimeout': 'Generation timed out (10 minutes)',
         'generate.errStuck': 'Background job stalled. Verify the upstream API is reachable.',
         'generate.galleryRefreshFail': 'Image generated, but gallery refresh failed',
+        'generate.responsesEditUnsupported': 'Reference images and masks require the Images API',
         'quality.auto': 'Auto',
         'quality.low': 'Low',
         'quality.medium': 'Medium',
@@ -2099,6 +2102,7 @@
         'mask.coverage': 'Coverage: {pct}%',
         'mask.saved': 'Mask saved',
         'mask.removed': 'Mask removed',
+        'mask.responsesUnsupported': 'Mask editing requires the Images API',
         'settings.promptHelperModel': 'Prompt helper model',
         'settings.range.promptHelperModel': 'Model used by Prompt Helper via /v1/chat/completions',
         'settings.test.connect': 'Test connection',
@@ -3357,6 +3361,14 @@
       const lockedIds = ['qualitySelect', 'formatSelect', 'quantityInput', 'responseFormatSelect', 'sizeSelect'];
       lockedIds.forEach((id) => setControlDisabled(id, lockParameters));
       setControlDisabled('modelSelect', loading);
+      const referenceInput = document.getElementById('referenceFileInput');
+      const referenceDropzone = document.getElementById('referenceDropzone');
+      const referencesDisabled = loading || responsesMode || activeLimits.reference_max_count <= 0;
+      if (referenceInput) referenceInput.disabled = referencesDisabled;
+      if (referenceDropzone) {
+        referenceDropzone.classList.toggle('opacity-50', referencesDisabled);
+        referenceDropzone.classList.toggle('pointer-events-none', referencesDisabled);
+      }
 
       const compressionInput = document.getElementById('compressionInput');
       if (responsesMode) {
@@ -4177,6 +4189,11 @@
 
       const outputFormat = document.getElementById('formatSelect').value;
       const quantity = clampQuantityInput() || 1;
+      if (isResponsesApiSelected() && referenceImages.length > 0) {
+        showError(t('generate.responsesEditUnsupported'));
+        showToast(t('generate.responsesEditUnsupported'), 'error');
+        return;
+      }
       const requestBody = {
         prompt,
         size: document.getElementById('sizeSelect').value,
@@ -4534,6 +4551,7 @@
           reader.onerror = () => reject(new Error('read fail'));
           reader.readAsDataURL(blob);
         });
+        referenceMaskDataUrl = null;
         referenceImages = [{ name: meta.filename, dataUrl }];
         renderReferencePreviews();
 
@@ -5385,8 +5403,37 @@
       lassoPts: [],
     };
 
+    function savedMaskAlpha(paintAlpha) {
+      return paintAlpha > 0 ? 0 : 255;
+    }
+
+    function restoredMaskPaintAlpha(maskAlpha) {
+      return maskAlpha < 128 ? 217 : 0;
+    }
+
+    async function normalizeFirstMaskReferenceToPng(width, height) {
+      const ref = referenceImages[0];
+      if (!ref || /^data:image\/png;base64,/i.test(ref.dataUrl)) return;
+      const image = new Image();
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = () => reject(new Error(t('reference.readFail')));
+        image.src = ref.dataUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(image, 0, 0, width, height);
+      referenceImages[0] = {
+        ...ref,
+        name: String(ref.name || 'reference').replace(/\.[^.]+$/, '') + '.png',
+        dataUrl: canvas.toDataURL('image/png'),
+      };
+    }
+
     function openMaskEditor() {
       if (referenceImages.length === 0) { showToast(t('mask.needRef'), 'error'); return; }
+      if (isResponsesApiSelected()) { showToast(t('mask.responsesUnsupported'), 'error'); return; }
       const modal = document.getElementById('maskModal');
       const baseImg = document.getElementById('maskBaseImg');
       const removeBtn = document.getElementById('maskRemoveBtn');
@@ -5419,13 +5466,12 @@
             const src = tctx.getImageData(0, 0, tmp.width, tmp.height);
             const dst = ctx.createImageData(canvas.width, canvas.height);
             for (let i = 0; i < src.data.length; i += 4) {
-              const lum = (src.data[i] + src.data[i + 1] + src.data[i + 2]) / 3;
-              const isPainted = src.data[i + 3] > 0 && lum > 128;
-              if (isPainted) {
+              const paintAlpha = restoredMaskPaintAlpha(src.data[i + 3]);
+              if (paintAlpha > 0) {
                 dst.data[i] = 255;
                 dst.data[i + 1] = 255;
                 dst.data[i + 2] = 255;
-                dst.data[i + 3] = 217;
+                dst.data[i + 3] = paintAlpha;
               }
             }
             ctx.putImageData(dst, 0, 0);
@@ -5800,6 +5846,7 @@
       const out = document.createElement('canvas');
       out.width = maskState.baseW || canvas.width;
       out.height = maskState.baseH || canvas.height;
+      await normalizeFirstMaskReferenceToPng(out.width, out.height);
       const outCtx = out.getContext('2d');
       const tmp = document.createElement('canvas');
       tmp.width = canvas.width;
@@ -5807,16 +5854,13 @@
       const tctx = tmp.getContext('2d');
       const binary = tctx.createImageData(canvas.width, canvas.height);
       for (let i = 0; i < src.data.length; i += 4) {
-        const v = src.data[i + 3] > 0 ? 255 : 0;
-        binary.data[i] = v;
-        binary.data[i + 1] = v;
-        binary.data[i + 2] = v;
-        binary.data[i + 3] = 255;
+        binary.data[i] = 255;
+        binary.data[i + 1] = 255;
+        binary.data[i + 2] = 255;
+        binary.data[i + 3] = savedMaskAlpha(src.data[i + 3]);
       }
       tctx.putImageData(binary, 0, 0);
       outCtx.imageSmoothingEnabled = false;
-      outCtx.fillStyle = '#000';
-      outCtx.fillRect(0, 0, out.width, out.height);
       outCtx.drawImage(tmp, 0, 0, out.width, out.height);
       referenceMaskDataUrl = out.toDataURL('image/png');
       renderReferencePreviews();

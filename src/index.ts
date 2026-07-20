@@ -705,6 +705,9 @@ app.post("/api/generate", async (c) => {
     referenceMaxBytes: limits.reference_max_mb * 1024 * 1024,
     generationMaxN,
   });
+  if (settings.api_path === "/v1/responses" && (payload.reference_images?.length || payload.mask)) {
+    return jsonError(400, "Reference images and masks require the Images API path");
+  }
   const turnstileToken = typeof (raw as { turnstile_token?: unknown })?.turnstile_token === "string"
     ? ((raw as { turnstile_token?: string }).turnstile_token as string).trim()
     : "";
