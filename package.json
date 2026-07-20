@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "prebuild-version": "node scripts/gen-version.mjs",
     "dev": "npm run prebuild-version && wrangler dev --config wrangler.dev.toml",
     "deploy": "npm run prebuild-version && wrangler deploy --config wrangler.dev.toml",

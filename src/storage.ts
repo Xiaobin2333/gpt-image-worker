@@ -224,6 +224,18 @@ export async function tryClaimJob(env: Bindings, jobId: string): Promise<Generat
   return rowToJob(updated as Record<string, unknown> | null);
 }
 
+export async function renewJobLease(env: Bindings, jobId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const updated = await env.DB.prepare(
+    `UPDATE jobs SET updated_at = ?
+       WHERE id = ? AND status = 'running'
+       RETURNING id`,
+  )
+    .bind(now, jobId)
+    .first();
+  return updated !== null;
+}
+
 export async function pruneOldJobs(env: Bindings): Promise<void> {
   const cutoff = new Date(Date.now() - JOB_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
   await env.DB.prepare(`DELETE FROM jobs WHERE created_at < ?`).bind(cutoff).run();

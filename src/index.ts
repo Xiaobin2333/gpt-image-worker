@@ -30,6 +30,7 @@ import {
   listProducedEntries,
   pruneOldJobs,
   pruneOrphanImages,
+  renewJobLease,
   saveJob,
   tryClaimJob,
   updateGalleryEntry,
@@ -604,6 +605,38 @@ type JobRunContext = {
   responses_concurrency: number;
 };
 
+const JOB_LEASE_RENEW_MS = 30_000;
+
+function startJobLeaseHeartbeat(env: Bindings, jobId: string): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const schedule = () => {
+    timer = setTimeout(async () => {
+      if (stopped) return;
+      try {
+        const active = await renewJobLease(env, jobId);
+        if (!active) {
+          stopped = true;
+          return;
+        }
+      } catch (err) {
+        console.error("job lease renewal failed", {
+          jobId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (!stopped) schedule();
+    }, JOB_LEASE_RENEW_MS);
+  };
+
+  schedule();
+  return () => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+}
+
 async function resolveJobContext(env: Bindings, input: GenerateJobInput | null): Promise<JobRunContext> {
   const [apiState, limits] = await Promise.all([loadApiSettingsState(env), loadRuntimeLimits(env)]);
   if (input?.snapshot) {
@@ -838,6 +871,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
 
         const controller2 = new AbortController();
         const timer = setTimeout(() => controller2.abort(), 5 * 60 * 1000);
+        const stopLeaseHeartbeat = startJobLeaseHeartbeat(env, jobId);
         const startedAt = Date.now();
         try {
           const entries = await callImageGeneration(
@@ -885,6 +919,7 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           sendEvent("error", { detail });
         } finally {
           clearTimeout(timer);
+          stopLeaseHeartbeat();
           await deleteJobTmpAssets(env, jobId).catch(() => {});
         }
       } finally {
@@ -1270,6 +1305,7 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  const stopLeaseHeartbeat = startJobLeaseHeartbeat(env, jobId);
   const startedAt = Date.now();
   try {
     const entries = await callImageGeneration(
@@ -1315,6 +1351,7 @@ async function processPendingJob(env: Bindings, jobId: string): Promise<void> {
     await saveJob(env, { ...claimed, status: "error", updated_at: new Date().toISOString(), detail });
   } finally {
     clearTimeout(timer);
+    stopLeaseHeartbeat();
     await deleteJobTmpAssets(env, jobId).catch(() => {});
   }
 }

@@ -388,7 +388,7 @@ export async function callImageGeneration(
       owner_id: ownerId,
     };
     await addToGallery(env, entry);
-    if (options.jobId && targetCount > 1) {
+    if (options.jobId) {
       await appendProducedId(env, options.jobId, id).catch((err) =>
         console.error("appendProducedId failed", { jobId: options.jobId, id, err: err instanceof Error ? err.message : String(err) }),
       );
