@@ -63,6 +63,8 @@ export interface GalleryEntry {
   image_width?: number | null;
   image_height?: number | null;
   duration?: string;
+  byte_size?: number | null;
+  favorite?: boolean;
   is_public: boolean;
   has_reference?: boolean;
   owner_id?: string;
@@ -94,6 +96,7 @@ export interface GenerateResponse {
   image_width?: number | null;
   image_height?: number | null;
   duration?: string;
+  byte_size?: number | null;
   is_public: boolean;
 }
 

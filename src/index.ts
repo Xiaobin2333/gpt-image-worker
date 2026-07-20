@@ -154,6 +154,7 @@ function buildGenerateResponse(domain: string, entries: GalleryEntry[]): Generat
     image_width: primary.image_width ?? null,
     image_height: primary.image_height ?? null,
     duration: primary.duration,
+    byte_size: primary.byte_size ?? null,
     is_public: primary.is_public,
   };
 }

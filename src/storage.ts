@@ -489,6 +489,8 @@ function rowToEntry(row: Record<string, unknown> | null): GalleryEntry | null {
     image_width: row.image_width !== null && row.image_width !== undefined ? Number(row.image_width) : null,
     image_height: row.image_height !== null && row.image_height !== undefined ? Number(row.image_height) : null,
     duration: row.duration ? String(row.duration) : undefined,
+    byte_size: row.byte_size !== null && row.byte_size !== undefined ? Number(row.byte_size) : null,
+    favorite: Number(row.favorite) === 1,
     is_public: Number(row.is_public) === 1,
     has_reference: Number(row.has_reference) === 1,
     owner_id: row.owner_id ? String(row.owner_id) : undefined,
@@ -500,8 +502,8 @@ export async function addToGallery(
   entry: GalleryEntry,
 ): Promise<GalleryEntry> {
   await env.DB.prepare(
-    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, is_public, has_reference, owner_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, byte_size, favorite, is_public, has_reference, owner_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   )
     .bind(
       entry.id,
@@ -520,6 +522,8 @@ export async function addToGallery(
       entry.image_width ?? null,
       entry.image_height ?? null,
       entry.duration ?? null,
+      entry.byte_size ?? null,
+      entry.favorite ? 1 : 0,
       entry.is_public ? 1 : 0,
       entry.has_reference ? 1 : 0,
       entry.owner_id ?? null,
@@ -545,8 +549,8 @@ export async function addGalleryEntriesForJob(
 ): Promise<boolean> {
   if (entries.length === 0) return true;
   const inserts = entries.map((entry) => env.DB.prepare(
-    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, is_public, has_reference, owner_id)
-     SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+    `INSERT INTO gallery (id, filename, prompt, size, created_at, model, quality, output_format, output_compression, response_format, n, api_path, api_preset_name, image_width, image_height, duration, byte_size, favorite, is_public, has_reference, owner_id)
+     SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
        WHERE EXISTS (
          SELECT 1 FROM jobs WHERE id = ? AND status = 'running' AND claim_token = ?
        )`,
@@ -581,6 +585,8 @@ function galleryEntryValues(entry: GalleryEntry): unknown[] {
     entry.image_width ?? null,
     entry.image_height ?? null,
     entry.duration ?? null,
+    entry.byte_size ?? null,
+    entry.favorite ? 1 : 0,
     entry.is_public ? 1 : 0,
     entry.has_reference ? 1 : 0,
     entry.owner_id ?? null,

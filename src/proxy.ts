@@ -411,6 +411,8 @@ export async function callImageGeneration(
       api_preset_name: options.apiPresetName,
       image_width: dims?.width ?? null,
       image_height: dims?.height ?? null,
+      byte_size: bytes.byteLength,
+      favorite: false,
       is_public: payload.is_public ?? true,
       has_reference: hasReferences,
       owner_id: ownerId,

@@ -123,12 +123,16 @@ test("gallery insert and produced checkpoint share one guarded D1 batch", async 
     prompt: "test",
     size: "1024x1024",
     created_at: "2026-01-01T00:00:00.000Z",
+    byte_size: 123456,
+    favorite: true,
     is_public: true,
   };
   assert.equal(await addToGalleryForJob(env, entry, "job-7", "claim-7"), true);
   assert.equal(statements.length, 2);
   assert.match(statements[0].sql, /WHERE EXISTS/);
   assert.match(statements[0].sql, /claim_token = \?/);
+  assert.match(statements[0].sql, /byte_size, favorite/);
+  assert.deepEqual(statements[0].args.slice(16, 18), [123456, 1]);
   assert.match(statements[1].sql, /produced_ids/);
 });
 
