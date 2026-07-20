@@ -57,7 +57,7 @@ export const LIMITS_BOUNDS = {
   prompt_max_chars: { min: 100, max: 20_000, default: 4_000 },
   reference_max_count: { min: 0, max: 16, default: 4 },
   reference_max_mb: { min: 1, max: 50, default: 4 },
-  generation_max_n: { min: 1, max: 20, default: 10 },
+  generation_max_n: { min: 1, max: 20, default: 20 },
   max_file_size_mb: { min: 1, max: 100, default: 50 },
   responses_concurrency: { min: 1, max: 10, default: 3 },
   access_session_minutes: { min: 5, max: 10_080, default: 180 },
