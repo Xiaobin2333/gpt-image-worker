@@ -30,8 +30,16 @@ test("runSettledBatch reports every failure when the whole batch fails", async (
 
 test("sequential image edits continue after individual failures", async () => {
   const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
-  assert.match(proxy, /if \(useSingleImagePerCall\) \{[\s\S]*image edit attempt failed, continuing batch[\s\S]*continue;/);
+  assert.match(proxy, /if \(useSingleImagePerCall\) \{[\s\S]*single-image attempt failed, continuing batch[\s\S]*continue;/);
   assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
+});
+
+test("Images API falls back when the upstream rejects tools[0].n", async () => {
+  const proxy = await readFile(new URL("../src/proxy.ts", import.meta.url), "utf8");
+  assert.match(proxy, /function requiresSingleImageCalls[\s\S]*\^gpt-image-2[\s\S]*\.test\(payload\.model\.trim\(\)\)/);
+  assert.match(proxy, /let useSingleImagePerCall = requiresSingleImageCalls\(payload\)/);
+  assert.match(proxy, /if \(!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*useSingleImagePerCall = true[\s\S]*continue;/);
+  assert.match(proxy, /const perCall = useSingleImagePerCall \? 1 : remaining/);
 });
 
 test("job image records share one guarded gallery batch", async () => {

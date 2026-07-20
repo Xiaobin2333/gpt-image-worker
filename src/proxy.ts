@@ -318,6 +318,15 @@ function upstreamErrorMessage(parsed: { status: number; json?: Record<string, un
   return `Upstream API error (${parsed.status}): ${parsed.text.slice(0, 200)}`;
 }
 
+function rejectsImageCountParameter(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Upstream API error \(400\):\s*Unknown parameter:\s*['"]tools\[0\]\.n['"]/i.test(message);
+}
+
+function requiresSingleImageCalls(payload: GenerateRequestBody): boolean {
+  return !!payload.mask || /^gpt-image-2(?:$|[-.:/_])/i.test(payload.model.trim());
+}
+
 export interface CallImageGenerationOptions {
   jobId?: string;
   existingEntries?: GalleryEntry[];
@@ -536,7 +545,7 @@ export async function callImageGeneration(
     const transientBackoffMs = [800, 1600];
     const maxAttempts = targetCount + 2 + maxTransientRetries;
     let transientRetries = 0;
-    const useSingleImagePerCall = !!payload.mask;
+    let useSingleImagePerCall = requiresSingleImageCalls(payload);
     while (entries.length < targetCount && attempt < maxAttempts) {
       attempt += 1;
       const remaining = targetCount - entries.length;
@@ -552,6 +561,15 @@ export async function callImageGeneration(
           await deletePendingImages(entries.filter((entry) => !existingIds.has(entry.id)));
           throw e;
         }
+        if (!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter(e)) {
+          useSingleImagePerCall = true;
+          console.warn("upstream rejected batch image count, retrying as single-image calls", {
+            requested: targetCount,
+            failed_attempt: attempt,
+            message: msg,
+          });
+          continue;
+        }
         const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
         if (transient && transientRetries < maxTransientRetries) {
           const backoffMs = transientBackoffMs[transientRetries] ?? 1600;
@@ -562,7 +580,7 @@ export async function callImageGeneration(
           continue;
         }
         if (useSingleImagePerCall) {
-          console.warn("image edit attempt failed, continuing batch", {
+          console.warn("single-image attempt failed, continuing batch", {
             requested: targetCount,
             succeeded: entries.length,
             failed_attempt: attempt,
