@@ -1125,7 +1125,7 @@
           </div>
           <div>
             <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="generate.quantity">数量</label>
-            <input id="quantityInput" type="number" min="1" max="10" step="1" value="1"
+            <input id="quantityInput" type="number" min="1" max="20" step="1" value="1"
               class="w-full min-h-[46px] bg-zinc-800/80 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30 transition-colors">
           </div>
           <div>
@@ -1691,6 +1691,7 @@
         'preview.generating': '生成中…',
         'preview.queued': '排队中…',
         'preview.elapsed': '耗时',
+        'preview.progress': '已完成 {completed} / {total}',
         'gallery.heading': '图库',
         'gallery.scope.default': '默认',
         'gallery.scope.all': '全部',
@@ -2055,6 +2056,7 @@
         'preview.generating': 'Generating…',
         'preview.queued': 'Queued…',
         'preview.elapsed': 'Elapsed',
+        'preview.progress': 'Completed {completed} / {total}',
         'gallery.heading': 'Gallery',
         'gallery.scope.default': 'Default',
         'gallery.scope.all': 'All',
@@ -2329,13 +2331,13 @@
       prompt_max_chars: 4000,
       reference_max_count: 4,
       reference_max_mb: 4,
-      generation_max_n: 10,
+      generation_max_n: 20,
     };
     let activeLimits = {
       prompt_max_chars: 4000,
       reference_max_count: 4,
       reference_max_mb: 4,
-      generation_max_n: 10,
+      generation_max_n: 20,
     };
     let activeTurnstile = { enabled: false, site_key: '' };
     let turnstileWidgetId = null;
@@ -2441,7 +2443,7 @@
 
     function effectiveMaxN() {
       const adminCap = 20;
-      const limit = Math.max(1, Number(activeLimits.generation_max_n) || 10);
+      const limit = Math.max(1, Number(activeLimits.generation_max_n) || 20);
       return isAdmin ? adminCap : limit;
     }
 
@@ -2993,7 +2995,7 @@
           cachedLimits = lim.value;
           document.getElementById('settingsR2Domain').value = lim.value.r2_public_domain || '';
           document.getElementById('settingsPromptMax').value = lim.value.prompt_max_chars ?? 4000;
-          document.getElementById('settingsGenerationMaxN').value = lim.value.generation_max_n ?? 10;
+          document.getElementById('settingsGenerationMaxN').value = lim.value.generation_max_n ?? 20;
           document.getElementById('settingsReferenceMaxCount').value = lim.value.reference_max_count ?? 4;
           document.getElementById('settingsReferenceMaxMb').value = lim.value.reference_max_mb ?? 4;
           document.getElementById('settingsMaxFileSizeMb').value = lim.value.max_file_size_mb ?? 50;
@@ -3085,7 +3087,7 @@
 
       const limR2 = document.getElementById('settingsR2Domain').value.trim();
       const limPromptMax = clampSetting('settingsPromptMax', 100, 20000, 4000);
-      const limMaxN = clampSetting('settingsGenerationMaxN', 1, 20, 10);
+      const limMaxN = clampSetting('settingsGenerationMaxN', 1, 20, 20);
       const limRefCount = clampSetting('settingsReferenceMaxCount', 0, 16, 4);
       const limRefMb = clampSetting('settingsReferenceMaxMb', 1, 50, 4);
       const limMaxFile = clampSetting('settingsMaxFileSizeMb', 1, 100, 50);
@@ -3533,14 +3535,12 @@
     }
 
     function refreshParameterControls(loading = false) {
-      const responsesMode = isResponsesApiSelected();
-      const lockParameters = loading || responsesMode;
       const lockedIds = ['qualitySelect', 'formatSelect', 'quantityInput', 'responseFormatSelect', 'sizeSelect'];
-      lockedIds.forEach((id) => setControlDisabled(id, lockParameters));
+      lockedIds.forEach((id) => setControlDisabled(id, loading));
       setControlDisabled('modelSelect', loading);
       const referenceInput = document.getElementById('referenceFileInput');
       const referenceDropzone = document.getElementById('referenceDropzone');
-      const referencesDisabled = loading || responsesMode || activeLimits.reference_max_count <= 0;
+      const referencesDisabled = loading || activeLimits.reference_max_count <= 0;
       if (referenceInput) referenceInput.disabled = referencesDisabled;
       if (referenceDropzone) {
         referenceDropzone.classList.toggle('opacity-50', referencesDisabled);
@@ -3548,12 +3548,6 @@
       }
 
       const compressionInput = document.getElementById('compressionInput');
-      if (responsesMode) {
-        compressionInput.disabled = true;
-        compressionInput.placeholder = t('generate.compressionDisabled');
-        compressionInput.classList.add('opacity-50', 'cursor-not-allowed');
-        return;
-      }
       if (loading) {
         compressionInput.disabled = true;
         return;
@@ -3565,13 +3559,6 @@
       const format = document.getElementById('formatSelect').value;
       const compressionInput = document.getElementById('compressionInput');
       const isPng = format === 'png';
-
-      if (isResponsesApiSelected()) {
-        compressionInput.disabled = true;
-        compressionInput.placeholder = t('generate.compressionDisabled');
-        compressionInput.classList.add('opacity-50', 'cursor-not-allowed');
-        return;
-      }
 
       compressionInput.disabled = isPng;
       compressionInput.placeholder = isPng ? t('generate.compressionDisabled') : '0-100';
@@ -4230,6 +4217,80 @@
       }
     }
 
+    function showGeneratedImageProgress(data) {
+      if (!data || typeof data !== 'object') return;
+      const incoming = Array.isArray(data.images) && data.images.length > 0
+        ? data.images
+        : [{ id: data.id, filename: data.filename || filenameFromUrl(data.image_url), image_url: data.image_url }];
+      const seen = new Set(previewImages.map((image) => image.id || image.image_url));
+      const fresh = incoming
+        .map((image) => ({
+          id: image.id || '',
+          filename: image.filename || filenameFromUrl(image.image_url),
+          image_url: image.image_url,
+        }))
+        .filter((image) => image.image_url && !seen.has(image.id || image.image_url));
+      if (fresh.length === 0) return;
+
+      const wasEmpty = previewImages.length === 0;
+      previewBaseData = { ...(previewBaseData || {}), ...data };
+      previewImages.push(...fresh);
+      document.getElementById('previewPrompt').textContent = data.prompt || previewBaseData.prompt || '';
+      document.getElementById('previewSection').classList.remove('hidden');
+
+      if (wasEmpty) {
+        previewActiveIndex = 0;
+        const primary = previewImages[0];
+        currentImageUrl = primary.image_url;
+        currentFilename = primary.filename;
+        activeLightboxImage = normalizeGalleryImage({
+          ...previewBaseData,
+          id: primary.id || data.id,
+          filename: primary.filename,
+          image_url: primary.image_url,
+        });
+        const previewImg = document.getElementById('previewImage');
+        previewImg.alt = data.prompt || '';
+        previewImg.className = 'zoom-img';
+        previewImg.classList.remove('hidden');
+        previewImg.style.opacity = '1';
+        document.getElementById('previewLoading').classList.add('hidden');
+        const controls = document.getElementById('previewControls');
+        if (controls) controls.classList.remove('hidden');
+        waitForPreviewImage(previewImg, primary.image_url).catch((error) => {
+          console.error('Incremental preview image failed to load:', error);
+        });
+      }
+
+      renderPreviewThumbs();
+      const partial = { ...data, images: fresh };
+      if (!prependGeneratedImages(partial)) loadGallery(1).catch(() => {});
+    }
+
+    async function finishGeneratedImage(data) {
+      if (previewImages.length === 0) {
+        await showGeneratedImage(data);
+        return;
+      }
+      previewBaseData = data;
+      const seen = new Set(previewImages.map((image) => image.id || image.image_url));
+      const complete = Array.isArray(data.images) ? data.images : [];
+      for (const image of complete) {
+        const normalized = {
+          id: image.id || '',
+          filename: image.filename || filenameFromUrl(image.image_url),
+          image_url: image.image_url,
+        };
+        if (normalized.image_url && !seen.has(normalized.id || normalized.image_url)) {
+          previewImages.push(normalized);
+          seen.add(normalized.id || normalized.image_url);
+        }
+      }
+      selectPreviewImage(Math.min(previewActiveIndex, previewImages.length - 1));
+      renderPreviewThumbs();
+      if (!prependGeneratedImages(data)) loadGallery(1).catch(() => {});
+    }
+
     const GENERATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
     let activeGenerationRun = null;
 
@@ -4295,7 +4356,7 @@
       } catch {}
     });
 
-    function streamGenerateJob(jobId, signal) {
+    function streamGenerateJob(jobId, signal, onImage) {
       return new Promise((resolve, reject) => {
         const ev = new EventSource('/api/generate/' + encodeURIComponent(jobId) + '/stream');
         let settled = false;
@@ -4323,6 +4384,24 @@
           const loadingText = document.getElementById('previewLoadingText');
           if (loadingText) loadingText.textContent = t('preview.queued');
           updatePreviewTime(t('preview.elapsed'));
+        });
+        ev.addEventListener('image', (e) => {
+          if (settled) return;
+          try {
+            const data = JSON.parse(e.data);
+            const loadingText = document.getElementById('previewLoadingText');
+            if (loadingText) loadingText.textContent = t('preview.progress', {
+              completed: data.completed || 0,
+              total: data.total || 0,
+            });
+            if (data.result && onImage) {
+              Promise.resolve(onImage(data.result, data.completed, data.total)).catch((error) => {
+                console.error('Incremental image render failed:', error);
+              });
+            }
+          } catch (error) {
+            console.error('Invalid image progress event:', error);
+          }
         });
         ev.addEventListener('done', (e) => {
           try {
@@ -4402,11 +4481,6 @@
 
       const outputFormat = document.getElementById('formatSelect').value;
       const quantity = clampQuantityInput() || 1;
-      if (isResponsesApiSelected() && referenceImages.length > 0) {
-        showError(t('generate.responsesEditUnsupported'));
-        showToast(t('generate.responsesEditUnsupported'), 'error');
-        return;
-      }
       const requestBody = {
         prompt,
         size: document.getElementById('sizeSelect').value,
@@ -4452,11 +4526,11 @@
         if (!submitted.job_id) throw new Error(t('generate.errDefault'));
         rememberActiveJob(submitted.job_id, prompt);
         run = beginGenerationRun(submitted.job_id);
-        const result = await runJobStream(submitted.job_id, run.controller.signal);
+        const result = await runJobStream(submitted.job_id, run.controller.signal, showGeneratedImageProgress);
         if (activeGenerationRun !== run) return;
         stopElapsedTicker();
         updatePreviewTime(t('preview.elapsed'));
-        await showGeneratedImage(result);
+        await finishGeneratedImage(result);
         clearActiveJob(submitted.job_id);
         resetTurnstileWidget();
         setLoading(false);
@@ -4473,9 +4547,9 @@
       }
     }
 
-    async function runJobStream(jobId, signal) {
+    async function runJobStream(jobId, signal, onImage) {
       try {
-        return await streamGenerateJob(jobId, signal);
+        return await streamGenerateJob(jobId, signal, onImage);
       } catch (e) {
         if (e?.jobTerminal || e?.generationCancelled || signal?.aborted) throw e;
         if (!e?.generationTransport) throw e;
@@ -4494,11 +4568,11 @@
       startElapsedTicker(t('preview.elapsed'));
       const run = beginGenerationRun(active.id);
       try {
-        const result = await runJobStream(active.id, run.controller.signal);
+        const result = await runJobStream(active.id, run.controller.signal, showGeneratedImageProgress);
         if (activeGenerationRun !== run) return;
         stopElapsedTicker();
         updatePreviewTime(t('preview.elapsed'));
-        await showGeneratedImage(result);
+        await finishGeneratedImage(result);
         clearActiveJob(active.id);
         setLoading(false);
       } catch (e) {
@@ -5690,7 +5764,6 @@
     }
 
     function applyTemplateSizeQuality(tpl) {
-      if (isResponsesApiSelected()) return;
       try {
         const m = /^(\d+)x(\d+)$/i.exec(tpl.size);
         if (m) {
@@ -5825,7 +5898,6 @@
 
     function openMaskEditor() {
       if (referenceImages.length === 0) { showToast(t('mask.needRef'), 'error'); return; }
-      if (isResponsesApiSelected()) { showToast(t('mask.responsesUnsupported'), 'error'); return; }
       const modal = document.getElementById('maskModal');
       const baseImg = document.getElementById('maskBaseImg');
       const removeBtn = document.getElementById('maskRemoveBtn');
@@ -6277,6 +6349,8 @@
       const body = { mode };
       if (apiUrl) body.api_url = apiUrl;
       if (apiKeyRaw && apiKeyRaw !== MASKED_API_KEY_VALUE) body.api_key = apiKeyRaw;
+      body.api_path = document.getElementById('settingsApiPath')?.value || '/v1/images/generations';
+      body.responses_model = document.getElementById('settingsResponsesModel')?.value || '';
       if (mode === 'image') body.model = document.getElementById('modelSelect')?.value || 'gpt-image-2';
       try {
         const data = await apiFetch('/api/admin/test-api', {

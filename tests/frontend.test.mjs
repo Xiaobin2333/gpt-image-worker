@@ -16,6 +16,12 @@ function loadInlineFunction(name) {
   return new Function(`${match[0]}; return ${name};`)();
 }
 
+function inlineFunctionSource(name) {
+  const match = html.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?^    \\}`, "m"));
+  assert.ok(match, `missing inline function ${name}`);
+  return match[0];
+}
+
 test("cancelled jobs abort the matching browser generation run", () => {
   assert.match(html, /results\.forEach\(\(r, idx\)[\s\S]*abortActiveGeneration\(ids\[idx\]\)/);
   assert.match(html, /run\.controller\.abort\(generationError\('cancelled'/);
@@ -46,9 +52,10 @@ test("mask export uses transparency for painted regions", () => {
   assert.equal(restoredMaskPaintAlpha(255), 0);
 });
 
-test("mask requests normalize references and reject Responses mode", () => {
+test("mask requests normalize references and support Responses mode", () => {
   assert.match(html, /await normalizeFirstMaskReferenceToPng\(out\.width, out\.height\)/);
-  assert.match(html, /isResponsesApiSelected\(\) && referenceImages\.length > 0/);
+  assert.doesNotMatch(html, /isResponsesApiSelected\(\) && referenceImages\.length > 0/);
+  assert.doesNotMatch(inlineFunctionSource("openMaskEditor"), /isResponsesApiSelected/);
   assert.match(html, /referenceMaskDataUrl = null;\s*referenceImages = \[\{ name: meta\.filename, dataUrl \}\]/);
 });
 
@@ -56,8 +63,39 @@ test("preview loading distinguishes retryable timeouts from hard failures", () =
   assert.match(html, /const PREVIEW_IMAGE_LOAD_TIMEOUT_MS = 30_000/);
   assert.match(html, /setTimeout\(\(\) => loadError\(true\), PREVIEW_IMAGE_LOAD_TIMEOUT_MS\)/);
   assert.match(html, /img\.onerror = \(\) => loadError\(false\)/);
-  assert.match(html, /await showGeneratedImage\(result\);\s*clearActiveJob\(submitted\.job_id\)/);
+  assert.match(html, /await finishGeneratedImage\(result\);\s*clearActiveJob\(submitted\.job_id\)/);
   assert.match(html, /if \(!e\?\.previewLoadTimedOut && run\?\.jobId\) clearActiveJob\(run\.jobId\)/);
+});
+
+test("SSE image events render completed images before the terminal result", () => {
+  const streamSource = inlineFunctionSource("streamGenerateJob");
+  assert.match(streamSource, /ev\.addEventListener\('image',[\s\S]*JSON\.parse\(e\.data\)/);
+  assert.match(streamSource, /t\('preview\.progress',[\s\S]*completed: data\.completed \|\| 0[\s\S]*total: data\.total \|\| 0/);
+  assert.match(streamSource, /Promise\.resolve\(onImage\(data\.result, data\.completed, data\.total\)\)/);
+  assert.match(html, /runJobStream\(submitted\.job_id, run\.controller\.signal, showGeneratedImageProgress\)/);
+  assert.match(html, /function finishGeneratedImage\(data\)[\s\S]*previewImages\.length === 0[\s\S]*showGeneratedImage\(data\)/);
+});
+
+test("generation quantity defaults to 20 images", () => {
+  assert.match(html, /id="quantityInput"[^>]*min="1"[^>]*max="20"/);
+  assert.match(html, /generation_max_n:\s*20/);
+  assert.match(html, /Number\(activeLimits\.generation_max_n\) \|\| 20/);
+  assert.match(html, /clampSetting\('settingsGenerationMaxN', 1, 20, 20\)/);
+});
+
+test("Responses mode keeps image parameters and references editable", () => {
+  const controlsSource = inlineFunctionSource("refreshParameterControls");
+  const formatSource = inlineFunctionSource("handleOutputFormatChange");
+  const templateSource = inlineFunctionSource("applyTemplateSizeQuality");
+  assert.match(controlsSource, /lockedIds = \['qualitySelect', 'formatSelect', 'quantityInput', 'responseFormatSelect', 'sizeSelect'\]/);
+  assert.match(controlsSource, /lockedIds\.forEach\(\(id\) => setControlDisabled\(id, loading\)\)/);
+  assert.doesNotMatch(controlsSource, /const lockParameters/);
+  assert.doesNotMatch(controlsSource, /setControlDisabled\([^\n]*responsesMode/);
+  assert.match(controlsSource, /referencesDisabled = loading \|\| activeLimits\.reference_max_count <= 0/);
+  assert.doesNotMatch(controlsSource, /responsesMode/);
+  assert.doesNotMatch(formatSource, /isResponsesApiSelected/);
+  assert.match(formatSource, /compressionInput\.disabled = isPng/);
+  assert.doesNotMatch(templateSource, /isResponsesApiSelected/);
 });
 
 test("active job cleanup is compare-and-delete and gallery refresh is background work", () => {
