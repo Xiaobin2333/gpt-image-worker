@@ -36,7 +36,7 @@ import {
   tryClaimJob,
   updateGalleryEntry,
 } from "./storage";
-import { LIMITS_BOUNDS, activateApiPreset, createApiPreset, deleteApiPreset, getActivePresetFromState, loadAccessLock, loadApiSettingsState, loadRateLimitConfig, loadRuntimeLimits, loadSettings, loadTurnstileConfig, maskKey, normalizeApiPath, saveAccessLock, saveRateLimitConfig, saveRuntimeLimits, saveSettings, saveTurnstileConfig, type ApiPreset, type ApiSettingsState } from "./settings";
+import { LIMITS_BOUNDS, activateApiPreset, createApiPreset, deleteApiPreset, getActivePresetFromState, loadAccessLock, loadApiSettingsState, loadRateLimitConfig, loadRuntimeLimits, loadSettings, loadTurnstileConfig, maskKey, normalizeApiPath, parseModelIds, saveAccessLock, saveRateLimitConfig, saveRuntimeLimits, saveSettings, saveTurnstileConfig, type ApiPreset, type ApiSettingsState } from "./settings";
 import { verifyTurnstileToken } from "./turnstile";
 import { checkRateLimit, pruneRateLimits } from "./ratelimit";
 import type { ApiPath, Bindings, GalleryEntry, GenerateJob, GenerateJobInput, GenerateJobSnapshot, GenerateResponse } from "./types";
@@ -208,11 +208,13 @@ function constantTimeEq(a: string, b: string): boolean {
 }
 
 app.get("/api/session", async (c) => {
-  const [lock, turnstile, limits] = await Promise.all([
+  const [lock, turnstile, limits, apiState] = await Promise.all([
     cachedAccessLock(c),
     cachedTurnstile(c),
     cachedLimits(c),
+    cachedApiState(c),
   ]);
+  const activePreset = getActivePresetFromState(apiState);
   const accessRequired = !!lock.enabled && !!lock.key;
   let accessAuthed = !accessRequired;
   let accessExpires: Date | null = null;
@@ -238,6 +240,7 @@ app.get("/api/session", async (c) => {
     admin_available: adminAvailable,
     is_admin: isAdmin,
     admin_expires_at: adminExpires ? adminExpires.toISOString() : null,
+    models: activePreset.models,
     turnstile: turnstile.enabled && turnstile.site_key
       ? { enabled: true, site_key: turnstile.site_key }
       : { enabled: false, site_key: "" },
@@ -497,6 +500,7 @@ function serializePreset(preset: ApiPreset) {
     name: preset.name,
     api_url: preset.api_url,
     api_path: preset.api_path,
+    models: preset.models,
     api_key_masked: maskKey(preset.api_key),
     has_api_key: !!preset.api_key,
   };
@@ -510,6 +514,7 @@ function buildSettingsResponse(state: ApiSettingsState) {
     api_key_masked: maskKey(active.api_key),
     has_api_key: !!active.api_key,
     api_path: active.api_path,
+    models: active.models,
     presets: state.presets.map(serializePreset),
   };
 }
@@ -540,12 +545,21 @@ app.post("/api/settings", async (c) => {
   const apiPath = normalizeApiPath(typeof raw.api_path === "string" ? raw.api_path : undefined);
   const activePresetId = typeof raw.active_preset_id === "string" ? raw.active_preset_id : null;
   const presetName = typeof raw.preset_name === "string" ? raw.preset_name : null;
+  let models: string[] | null = null;
+  if (raw.models !== undefined) {
+    try {
+      models = parseModelIds(raw.models);
+    } catch (error) {
+      return jsonError(400, error instanceof Error ? error.message : "Invalid models");
+    }
+  }
   await saveSettings(c.env, {
     active_preset_id: activePresetId,
     preset_name: presetName,
     api_url: apiUrl,
     api_key: apiKey,
     api_path: apiPath,
+    models,
   });
   const state = await loadApiSettingsState(c.env);
   return c.json(buildSettingsResponse(state));

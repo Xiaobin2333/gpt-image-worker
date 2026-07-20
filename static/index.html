@@ -770,6 +770,14 @@
               <input type="password" id="settingsApiKey" placeholder="sk-..." class="settings-input font-mono">
             </div>
             <div>
+              <label class="block text-sm font-medium text-zinc-300 mb-2" data-i18n="settings.models">可用模型</label>
+              <textarea id="settingsModels" rows="4"
+                data-i18n-attr="placeholder:settings.modelsPlaceholder"
+                placeholder="gpt-image-2&#10;dall-e-3"
+                class="settings-input font-mono"></textarea>
+              <p class="mt-1.5 text-xs text-zinc-500" data-i18n="settings.modelsHint">每行一个模型 ID；首项为该预设的默认。允许字母、数字、点、冒号、斜杠、下划线、短横，最多 50 项。</p>
+            </div>
+            <div>
               <div class="flex flex-wrap gap-2">
                 <button type="button" onclick="runApiTest('models')"
                   class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-medium text-zinc-200 hover:bg-zinc-800 transition-colors">
@@ -1526,6 +1534,10 @@
         'settings.apiUrlHint': '不包含 API Path 的根地址',
         'settings.apiPath': 'API Path',
         'settings.apiKey': 'API Key',
+        'settings.models': '可用模型',
+        'settings.modelsPlaceholder': 'gpt-image-2\ndall-e-3',
+        'settings.modelsHint': '每行一个模型 ID；首项为该预设的默认。允许字母、数字、点、冒号、斜杠、下划线、短横，最多 50 项。',
+        'settings.modelsInvalidLine': '第 {n} 行格式不合法：{line}',
         'settings.accessSection': '站点访问保护',
         'settings.accessEnable': '启用访问密钥',
         'settings.accessHint': '开启后所有访客必须先输入密钥才能访问站点',
@@ -1865,6 +1877,10 @@
         'settings.apiUrlHint': 'The base URL without the API path',
         'settings.apiPath': 'API Path',
         'settings.apiKey': 'API Key',
+        'settings.models': 'Available models',
+        'settings.modelsPlaceholder': 'gpt-image-2\ndall-e-3',
+        'settings.modelsHint': 'One model ID per line; the first item becomes this preset\'s default. Letters, digits, dot, colon, slash, underscore, hyphen are allowed; max 50 entries.',
+        'settings.modelsInvalidLine': 'Line {n} is invalid: {line}',
         'settings.accessSection': 'Site Access Protection',
         'settings.accessEnable': 'Enable access key',
         'settings.accessHint': 'When enabled, every visitor must enter the access key first.',
@@ -2324,6 +2340,7 @@
         isAdmin = !!session.is_admin;
         activeTurnstile = session.turnstile || { enabled: false, site_key: '' };
         applySessionLimits(session.limits);
+        applyModelsToHomeSelect(Array.isArray(session.models) ? session.models : []);
         if (accessRequired && !session.authenticated) {
           openAccessGate();
           return;
@@ -2397,6 +2414,7 @@
         isAdmin = !!session.is_admin;
         activeTurnstile = session.turnstile || { enabled: false, site_key: '' };
         applySessionLimits(session.limits);
+        applyModelsToHomeSelect(Array.isArray(session.models) ? session.models : []);
       } catch (e) {
         isAdmin = false;
       }
@@ -2689,6 +2707,37 @@
         || null;
     }
 
+    const MODEL_NAME_RE = /^[A-Za-z0-9._:\-\/]{1,80}$/;
+
+    function parseModelsTextarea() {
+      const ta = document.getElementById('settingsModels');
+      if (!ta) return [];
+      const lines = String(ta.value || '').split(/\r?\n/);
+      const seen = new Set();
+      const out = [];
+      lines.forEach((line, idx) => {
+        const value = line.trim();
+        if (!value) return;
+        if (!MODEL_NAME_RE.test(value)) {
+          throw new Error(t('settings.modelsInvalidLine', { n: idx + 1, line: value }));
+        }
+        if (seen.has(value)) return;
+        seen.add(value);
+        if (out.length < 50) out.push(value);
+      });
+      return out;
+    }
+
+    function applyModelsToHomeSelect(models) {
+      const select = document.getElementById('modelSelect');
+      if (!select) return;
+      const list = Array.isArray(models) ? models.filter(Boolean).map(String) : [];
+      const previous = select.value;
+      const finalList = list.length ? list : ['gpt-image-2'];
+      select.innerHTML = finalList.map((model) => '<option value="' + escapeAttribute(model) + '">' + escapeHtml(model) + '</option>').join('');
+      select.value = finalList.includes(previous) ? previous : finalList[0];
+    }
+
     function syncApiSettingsState(data) {
       apiSettingsState = {
         active_preset_id: data.active_preset_id || null,
@@ -2698,10 +2747,14 @@
       const apiUrl = active?.api_url || data.api_url || '';
       const apiPath = active?.api_path || data.api_path || '/v1/images/generations';
       const hasKey = !!(active?.has_api_key ?? data.has_api_key);
+      const models = Array.isArray(active?.models) ? active.models : (Array.isArray(data.models) ? data.models : []);
       document.getElementById('settingsPresetName').value = active?.name || '';
       document.getElementById('settingsApiUrl').value = apiUrl;
       document.getElementById('settingsApiPath').value = apiPath;
       document.getElementById('settingsApiKey').value = hasKey ? MASKED_API_KEY_VALUE : '';
+      const modelsTextarea = document.getElementById('settingsModels');
+      if (modelsTextarea) modelsTextarea.value = models.join('\n');
+      applyModelsToHomeSelect(models);
       renderApiPresets();
       refreshParameterControls();
     }
@@ -2928,11 +2981,19 @@
       if (clampedAny) showToast(t('settings.clamped'), 'success');
 
       const presetName = document.getElementById('settingsPresetName').value.trim();
+      let parsedModels;
+      try {
+        parsedModels = parseModelsTextarea();
+      } catch (error) {
+        showToast(error.message, 'error');
+        return;
+      }
       const apiBody = {
         active_preset_id: apiSettingsState.active_preset_id,
         preset_name: presetName,
         api_url: apiUrl,
         api_path: apiPath,
+        models: parsedModels,
       };
       apiBody.api_key = apiKey === MASKED_API_KEY_VALUE ? null : apiKey;
       const lockBody = { enabled: lockEnabled };

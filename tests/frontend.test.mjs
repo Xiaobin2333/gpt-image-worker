@@ -59,3 +59,11 @@ test("active job cleanup is compare-and-delete and gallery refresh is background
   assert.match(html, /loadGallery\(1, \{ throwOnError: true \}\)\.catch/);
   assert.doesNotMatch(html, /await loadGallery\(1, \{ throwOnError: true \}\)/);
 });
+
+test("API presets restore their model list into the generation selector", () => {
+  assert.match(html, /id="settingsModels"/);
+  assert.match(html, /function parseModelsTextarea\(\)[\s\S]*MODEL_NAME_RE[\s\S]*out\.length < 50/);
+  assert.match(html, /function applyModelsToHomeSelect\(models\)[\s\S]*\['gpt-image-2'\]/);
+  assert.match(html, /models: parsedModels/);
+  assert.match(html, /applyModelsToHomeSelect\(Array\.isArray\(session\.models\) \? session\.models : \[\]\)/);
+});

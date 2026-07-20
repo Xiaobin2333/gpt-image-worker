@@ -12,6 +12,7 @@ export interface ApiPreset {
   api_url: string;
   api_key: string;
   api_path: ApiPath;
+  models: string[];
 }
 
 export interface ApiSettingsState {
@@ -68,6 +69,33 @@ export function normalizeApiPath(path: string | undefined | null): ApiPath {
 }
 
 const KV_CACHE_TTL_SECONDS = 300;
+const MODEL_ID_RE = /^[A-Za-z0-9._:\-/]{1,80}$/;
+
+function sanitizeModelIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") continue;
+    const model = value.trim();
+    if (!model || !MODEL_ID_RE.test(model) || seen.has(model)) continue;
+    seen.add(model);
+    models.push(model);
+    if (models.length >= 50) break;
+  }
+  return models;
+}
+
+export function parseModelIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) throw new Error("models must be an array");
+  for (let i = 0; i < raw.length; i++) {
+    const value = raw[i];
+    if (typeof value !== "string" || !MODEL_ID_RE.test(value.trim())) {
+      throw new Error(`Invalid model id at index ${i}`);
+    }
+  }
+  return sanitizeModelIds(raw);
+}
 
 function sanitizePreset(raw: unknown, fallbackId: string, fallbackName: string): ApiPreset {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -77,7 +105,8 @@ function sanitizePreset(raw: unknown, fallbackId: string, fallbackName: string):
   const apiUrl = typeof r.api_url === "string" ? r.api_url.replace(/\/+$/, "") : "";
   const apiKey = typeof r.api_key === "string" ? r.api_key : "";
   const apiPath = normalizeApiPath(typeof r.api_path === "string" ? r.api_path : undefined);
-  return { id, name, api_url: apiUrl, api_key: apiKey, api_path: apiPath };
+  const models = sanitizeModelIds(r.models);
+  return { id, name, api_url: apiUrl, api_key: apiKey, api_path: apiPath, models };
 }
 
 function defaultPresetFromEnv(env: Bindings): ApiPreset {
@@ -87,6 +116,7 @@ function defaultPresetFromEnv(env: Bindings): ApiPreset {
     api_url: (env.DEFAULT_API_URL ?? "").replace(/\/+$/, ""),
     api_key: env.DEFAULT_API_KEY ?? "",
     api_path: normalizeApiPath(env.DEFAULT_API_PATH),
+    models: [],
   };
 }
 
@@ -117,6 +147,7 @@ export async function loadApiSettingsState(env: Bindings): Promise<ApiSettingsSt
     api_url: typeof legacy.api_url === "string" ? legacy.api_url.replace(/\/+$/, "") : seed.api_url,
     api_key: typeof legacy.api_key === "string" ? legacy.api_key : seed.api_key,
     api_path: normalizeApiPath(typeof legacy.api_path === "string" ? legacy.api_path : seed.api_path),
+    models: sanitizeModelIds((legacy as Record<string, unknown>).models),
   };
   return { active_preset_id: preset.id, presets: [preset] };
 }
@@ -145,7 +176,7 @@ export async function loadSettings(env: Bindings): Promise<RuntimeSettings> {
 
 export async function saveSettings(
   env: Bindings,
-  patch: { active_preset_id?: string | null; preset_name?: string | null; api_url: string; api_key?: string | null; api_path: string },
+  patch: { active_preset_id?: string | null; preset_name?: string | null; api_url: string; api_key?: string | null; api_path: string; models?: string[] | null },
 ): Promise<RuntimeSettings> {
   const state = await loadApiSettingsState(env);
   const targetId = patch.active_preset_id && state.presets.some((p) => p.id === patch.active_preset_id)
@@ -161,6 +192,7 @@ export async function saveSettings(
     api_url: patch.api_url.replace(/\/+$/, ""),
     api_key: patch.api_key === undefined || patch.api_key === null ? target.api_key : patch.api_key,
     api_path: normalizeApiPath(patch.api_path),
+    models: patch.models === undefined || patch.models === null ? target.models : sanitizeModelIds(patch.models),
   };
   const presets = state.presets.map((p) => (p.id === target.id ? next : p));
   await saveApiSettingsState(env, { active_preset_id: target.id, presets });
@@ -184,6 +216,7 @@ export async function createApiPreset(
     api_url: (patch.api_url ?? source.api_url).replace(/\/+$/, ""),
     api_key: patch.api_key ?? source.api_key,
     api_path: normalizeApiPath(patch.api_path ?? source.api_path),
+    models: [...source.models],
   };
   const presets = [...state.presets, created];
   const nextState: ApiSettingsState = { active_preset_id: id, presets };
