@@ -85,16 +85,16 @@ test("runSettledBatchWithRetries keeps permanent failures terminal", async () =>
   assert.equal(batch.errors[0].index, 1);
 });
 
-test("sequential image edits continue after individual failures", async () => {
-  assert.match(proxy, /if \(useSingleImagePerCall\) \{[\s\S]*single-image attempt failed, continuing batch[\s\S]*continue;/);
+test("incomplete image batches stay terminal after completed images are retained", async () => {
+  assert.match(proxy, /appendEntries\(completedEntriesFromError\(e\)\)/);
   assert.match(proxy, /if \(entries\.length === 0\) throw new Error\("Upstream produced no images"\)/);
+  assert.match(proxy, /if \(entries\.length < targetCount\) \{[\s\S]*generation was not retried to avoid duplicate upstream images/);
 });
 
 test("Images API falls back when the upstream rejects tools[0].n", async () => {
   assert.match(proxy, /function requiresSingleImageCalls[\s\S]*\^gpt-image-2[\s\S]*\.test\(payload\.model\.trim\(\)\)/);
-  assert.match(proxy, /let useSingleImagePerCall = requiresSingleImageCalls\(payload\)/);
-  assert.match(proxy, /if \(!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*runParallelSingleCalls\(remaining, remaining, "images fallback"\)[\s\S]*break;/);
-  assert.match(proxy, /const perCall = useSingleImagePerCall \? 1 : remaining/);
+  assert.match(proxy, /if \(perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*runParallelSingleCalls\(remaining, remaining, "images fallback"\)[\s\S]*break;/);
+  assert.match(proxy, /const perCall = remaining/);
 });
 
 test("Responses API uses an image_generation tool payload", () => {
@@ -156,7 +156,7 @@ test("single-image paths use the requested quantity as their concurrency", () =>
 test("parallel edits reuse decoded inputs and save the detected output format", () => {
   assert.match(proxy, /const editAssets = apiPath === "\/v1\/images\/generations" && hasReferences[\s\S]*prepareEditAssets\(payload\)/);
   assert.match(proxy, /callImagesEdits\(settings\.api_url, settings\.api_key, callPayload, editAssets!, signal\)/);
-  assert.match(proxy, /const actualFormat = detectFormatInfo\(bytes\) \?\? fmt[\s\S]*saveImage\(env, filename, bytes, actualFormat\.mediaType\)/);
+  assert.match(proxy, /const actualFormat = detectFormatInfo\(bytes\) \?\? fmt[\s\S]*saveImage\(env, entry\.filename, bytes, actualFormat\.mediaType\)/);
   assert.doesNotMatch(proxy.match(/export function buildResponsesPayload\([\s\S]*?^\}/m)?.[0] ?? "", /parseDataUrl/);
 });
 
@@ -166,14 +166,21 @@ test("upstream JSON parsing does not depend on the Content-Type header", () => {
 });
 
 test("streamed jobs publish each committed image as an SSE image event", () => {
-  assert.match(proxy, /else \{[\s\S]*addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*publishedIds\.add\(entry\.id\)[\s\S]*if \(options\.onImage\)/);
-  assert.match(proxy, /deletePendingImages\(persisted\.results\.filter\(\(entry\) => !publishedIds\.has\(entry\.id\)\)\)/);
+  assert.match(proxy, /addToGalleryForJob\(env, entry, options\.jobId, options\.claimToken\)[\s\S]*const firstPublish = !publishedIds\.has\(committedEntry\.id\)[\s\S]*options\.onImage/);
   assert.match(worker, /executeClaimedJob\([\s\S]*\(result, completed\) => emitResultImages\(result, completed\)/);
 });
 
-test("parallel jobs retry missing images and reject incomplete terminal results", () => {
-  assert.match(proxy, /runSettledBatchWithRetries\([\s\S]*maxRetries: 2[\s\S]*isRetryableParallelError/);
+test("generation retries only explicit pre-generation throttle responses", () => {
+  assert.match(proxy, /error instanceof UpstreamRequestError[\s\S]*error\.status === 425 \|\| error\.status === 429/);
+  assert.doesNotMatch(proxy.match(/function isRetryableParallelError[\s\S]*?^\}/m)?.[0] ?? "", />= 500|408|409/);
   assert.match(proxy, /Generated \$\{entries\.length\} of \$\{targetCount\} images; \$\{batch\.errors\.length\} calls failed/);
+});
+
+test("post-processing retries reuse stable image identities without regenerating", () => {
+  assert.match(proxy, /const persistenceStates: PersistenceState\[\] = usable\.map[\s\S]*id: generateImageId\(\)[\s\S]*createdAt:/);
+  assert.match(proxy, /runSettledBatchWithRetries\([\s\S]*persistEntry\(usable\[index\]!, parsed\.text, persistenceStates\[index\]!\)[\s\S]*shouldRetry: isRetryablePersistenceError/);
+  assert.match(proxy, /retrying image persistence without regenerating/);
+  assert.match(proxy, /existing = await getEntry\(env, entry\.id\)[\s\S]*if \(!existing\)[\s\S]*deleteImage/);
 });
 
 test("job image records share one guarded gallery batch", async () => {

@@ -1,7 +1,7 @@
 import type { ApiPath, Bindings, GalleryEntry, GenerateRequestBody, RuntimeSettings } from "./types";
-import { addGalleryEntriesForJob, addToGallery, addToGalleryForJob, deleteImage, deleteImages, generateImageId, saveImage } from "./storage";
+import { addGalleryEntriesForJob, addToGallery, addToGalleryForJob, deleteImage, deleteImages, generateImageId, getEntry, saveImage } from "./storage";
 import { loadRuntimeLimits } from "./settings";
-import { runSettledBatch, runSettledBatchWithRetries } from "./batch";
+import { runSettledBatchWithRetries } from "./batch";
 
 interface FormatInfo {
   outputFormat: "png" | "jpeg" | "webp";
@@ -116,6 +116,27 @@ function decodeBase64(b64: string): ArrayBuffer {
 interface UpstreamImageRecord {
   b64_json?: string;
   url?: string;
+}
+
+class UpstreamRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UpstreamRequestError";
+  }
+}
+
+class IncompleteGenerationError extends Error {
+  constructor(
+    message: string,
+    readonly completedEntries: GalleryEntry[],
+    readonly rootCause?: unknown,
+  ) {
+    super(message);
+    this.name = "IncompleteGenerationError";
+  }
 }
 
 function extractResponseImageResult(value: unknown): UpstreamImageRecord | null {
@@ -395,14 +416,8 @@ function requiresSingleImageCalls(payload: GenerateRequestBody): boolean {
 }
 
 function isRetryableParallelError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = /(?:Upstream API error|Upstream returned non-JSON) \((\d{3})\)/.exec(message)?.[1];
-  if (status) {
-    const code = Number(status);
-    return code === 408 || code === 409 || code === 425 || code === 429 || code >= 500;
-  }
-  if (/Image too large|invalid base64|malformed data URL/i.test(message)) return false;
-  return true;
+  return error instanceof UpstreamRequestError
+    && (error.status === 425 || error.status === 429);
 }
 
 export interface CallImageGenerationOptions {
@@ -442,11 +457,21 @@ export async function callImageGeneration(
       throw signal.reason instanceof Error ? signal.reason : new Error("Generation job cancelled");
     }
   };
-  const isFatalJobError = (error: unknown) => {
+  const isFatalJobError = (error: unknown): boolean => {
+    if (error instanceof IncompleteGenerationError && error.rootCause) {
+      return isFatalJobError(error.rootCause);
+    }
     if (signal?.aborted) return true;
     const message = error instanceof Error ? error.message : String(error);
     return (error instanceof DOMException && error.name === "AbortError")
       || /Generation job (?:lease lost|cancelled)/i.test(message);
+  };
+
+  const isRetryablePersistenceError = (error: unknown): boolean => {
+    if (isFatalJobError(error)) return false;
+    if (error instanceof DOMException && error.name === "InvalidCharacterError") return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return !/Image too large|malformed data URL|No image data \(b64_json or url\)|HTTP (?:400|401|403|404)\b/i.test(message);
   };
 
   const deletePendingImages = async (pending: GalleryEntry[]) => {
@@ -467,81 +492,124 @@ export async function callImageGeneration(
     response_format: payload.response_format,
   });
 
-  const persistEntry = async (rec: UpstreamImageRecord, sourceText: string): Promise<GalleryEntry> => {
+  interface PersistenceState {
+    id: string;
+    createdAt: string;
+    bytes?: ArrayBuffer;
+    entry?: GalleryEntry;
+  }
+
+  const persistEntry = async (
+    rec: UpstreamImageRecord,
+    sourceText: string,
+    state: PersistenceState,
+  ): Promise<GalleryEntry> => {
     if (!rec.b64_json && rec.url) {
       console.log("upstream returned image url", { url: rec.url });
     }
     ensureNotAborted();
-    const bytes = await fetchImageBytes(rec, sourceText, settings.api_url, settings.api_key, signal);
-    ensureNotAborted();
-    if (bytes.byteLength > maxBytes) {
-      throw new Error(`Image too large: ${bytes.byteLength} bytes (max ${maxBytes})`);
+    if (!state.bytes || !state.entry) {
+      const bytes = await fetchImageBytes(rec, sourceText, settings.api_url, settings.api_key, signal);
+      ensureNotAborted();
+      if (bytes.byteLength > maxBytes) {
+        throw new Error(`Image too large: ${bytes.byteLength} bytes (max ${maxBytes})`);
+      }
+      const actualFormat = detectFormatInfo(bytes) ?? fmt;
+      const filename = `${state.id}.${actualFormat.extension}`;
+      const dims = getImageDimensions(bytes);
+      state.bytes = bytes;
+      state.entry = {
+        id: state.id,
+        prompt: payload.prompt,
+        size: payload.size,
+        filename,
+        created_at: state.createdAt,
+        model: payload.model,
+        quality: payload.quality,
+        output_format: actualFormat.outputFormat,
+        output_compression: actualFormat.outputFormat === "png" ? null : payload.output_compression ?? null,
+        response_format: payload.response_format,
+        n: payload.n,
+        api_path: apiPath,
+        api_preset_name: options.apiPresetName,
+        image_width: dims?.width ?? null,
+        image_height: dims?.height ?? null,
+        byte_size: bytes.byteLength,
+        favorite: false,
+        is_public: payload.is_public ?? true,
+        has_reference: hasReferences,
+        owner_id: ownerId,
+      };
     }
-    const id = generateImageId();
-    const actualFormat = detectFormatInfo(bytes) ?? fmt;
-    const filename = `${id}.${actualFormat.extension}`;
-    await saveImage(env, filename, bytes, actualFormat.mediaType);
+
+    const bytes = state.bytes;
+    const entry = state.entry;
+    const actualFormat = formatInfo(entry.output_format ?? payload.output_format);
+    await saveImage(env, entry.filename, bytes, actualFormat.mediaType);
     try {
       ensureNotAborted();
     } catch (err) {
-      await deleteImage(env, filename).catch(() => {});
+      await deleteImage(env, entry.filename).catch(() => {});
       throw err;
     }
-    const dims = getImageDimensions(bytes);
-    const entry: GalleryEntry = {
-      id,
-      prompt: payload.prompt,
-      size: payload.size,
-      filename,
-      created_at: new Date().toISOString(),
-      model: payload.model,
-      quality: payload.quality,
-      output_format: actualFormat.outputFormat,
-      output_compression: actualFormat.outputFormat === "png" ? null : payload.output_compression ?? null,
-      response_format: payload.response_format,
-      n: payload.n,
-      api_path: apiPath,
-      api_preset_name: options.apiPresetName,
-      image_width: dims?.width ?? null,
-      image_height: dims?.height ?? null,
-      byte_size: bytes.byteLength,
-      favorite: false,
-      is_public: payload.is_public ?? true,
-      has_reference: hasReferences,
-      owner_id: ownerId,
-    };
-    if (!options.jobId) {
-      try {
+
+    let committedEntry = entry;
+    try {
+      if (!options.jobId) {
         await addToGallery(env, entry);
-      } catch (err) {
-        await deleteImage(env, filename).catch(() => {});
-        throw err;
+      } else {
+        if (!options.claimToken) throw new Error("Generation claim token missing");
+        const committed = await addToGalleryForJob(env, entry, options.jobId, options.claimToken);
+        if (!committed) throw new Error("Generation job lease lost");
       }
-    } else {
-      if (!options.claimToken) {
-        await deleteImage(env, filename).catch(() => {});
-        throw new Error("Generation claim token missing");
+    } catch (error) {
+      if (isFatalJobError(error)) {
+        await deleteImage(env, entry.filename).catch(() => {});
+        throw error;
       }
-      const committed = await addToGalleryForJob(env, entry, options.jobId, options.claimToken);
-      if (!committed) {
-        await deleteImage(env, filename).catch(() => {});
-        throw new Error("Generation job lease lost");
+      let existing: GalleryEntry | null;
+      try {
+        existing = await getEntry(env, entry.id);
+      } catch (lookupError) {
+        console.error("gallery commit verification failed", {
+          imageId: entry.id,
+          error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+        });
+        throw error;
       }
-      publishedIds.add(entry.id);
-      if (options.onImage) {
-        try {
-          await options.onImage(entry, publishedIds.size, targetCount);
-        } catch (error) {
-          console.error("generation image progress callback failed", {
-            jobId: options.jobId,
-            imageId: entry.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+      if (!existing) {
+        await deleteImage(env, entry.filename).catch(() => {});
+        throw error;
+      }
+      committedEntry = existing;
+    }
+
+    const firstPublish = !publishedIds.has(committedEntry.id);
+    publishedIds.add(committedEntry.id);
+    if (options.jobId && firstPublish && options.onImage) {
+      try {
+        await options.onImage(committedEntry, publishedIds.size, targetCount);
+      } catch (error) {
+        console.error("generation image progress callback failed", {
+          jobId: options.jobId,
+          imageId: committedEntry.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
-    return entry;
+    return committedEntry;
   };
+
+  const appendEntries = (produced: GalleryEntry[]) => {
+    for (const entry of produced) {
+      if (entries.length >= targetCount || existingIds.has(entry.id)) continue;
+      entries.push(entry);
+      existingIds.add(entry.id);
+    }
+  };
+
+  const completedEntriesFromError = (error: unknown): GalleryEntry[] =>
+    error instanceof IncompleteGenerationError ? error.completedEntries : [];
 
   const runOneCall = async (perCall: number, attempt: number): Promise<GalleryEntry[]> => {
     ensureNotAborted();
@@ -569,7 +637,9 @@ export async function callImageGeneration(
 
     const parsed = await readUpstreamJson(resp);
     ensureNotAborted();
-    if (parsed.status >= 400) throw new Error(upstreamErrorMessage(parsed));
+    if (parsed.status >= 400) {
+      throw new UpstreamRequestError(parsed.status, upstreamErrorMessage(parsed));
+    }
     if (!parsed.json) throw new Error(`Upstream returned non-JSON (${parsed.status}): ${parsed.text.slice(0, 200)}`);
 
     const records: UpstreamImageRecord[] = apiPath === "/v1/responses"
@@ -588,23 +658,45 @@ export async function callImageGeneration(
       throw new Error(`No image data in upstream response: ${parsed.text.slice(0, 200)}`);
     }
     const usable = records.slice(0, perCall);
-    const persisted = await runSettledBatch(
+    const persistenceStates: PersistenceState[] = usable.map(() => ({
+      id: generateImageId(),
+      createdAt: new Date().toISOString(),
+    }));
+    const persisted = await runSettledBatchWithRetries(
       usable.length,
       usable.length,
-      (index) => persistEntry(usable[index]!, parsed.text),
+      (index) => persistEntry(usable[index]!, parsed.text, persistenceStates[index]!),
+      {
+        maxRetries: 2,
+        shouldRetry: isRetryablePersistenceError,
+        beforeRetry: (errors, nextAttempt) => {
+          console.warn("retrying image persistence without regenerating", {
+            next_attempt: nextAttempt,
+            retry_count: errors.length,
+            errors: errors.slice(0, 3).map(({ index, error }) => ({
+              index,
+              message: error instanceof Error ? error.message : String(error),
+            })),
+          });
+        },
+      },
     );
-    if (persisted.errors.length > 0) {
+    if (persisted.errors.length > 0 || persisted.results.length < perCall) {
       console.warn("upstream records partially failed to persist", {
-        requested: usable.length,
+        requested: perCall,
+        returned: usable.length,
         succeeded: persisted.results.length,
         failed: persisted.errors.length,
       });
       const fatal = persisted.errors.find(({ error }) => isFatalJobError(error));
-      if (fatal) {
-        await deletePendingImages(persisted.results.filter((entry) => !publishedIds.has(entry.id)));
-        throw fatal.error;
-      }
-      if (persisted.results.length === 0) throw persisted.errors[0]!.error;
+      const details = persisted.errors.slice(0, 3)
+        .map(({ error }) => error instanceof Error ? error.message : String(error));
+      if (usable.length < perCall) details.unshift(`upstream returned ${usable.length} records`);
+      throw new IncompleteGenerationError(
+        `Generated ${persisted.results.length} of ${perCall} images${details.length > 0 ? `: ${details.join("; ")}` : ""}`,
+        persisted.results,
+        fatal?.error,
+      );
     }
     return persisted.results;
   };
@@ -641,10 +733,9 @@ export async function callImageGeneration(
       },
     );
     for (const produced of batch.results) {
-      for (const entry of produced) {
-        if (entries.length < targetCount) entries.push(entry);
-      }
+      appendEntries(produced);
     }
+    for (const { error } of batch.errors) appendEntries(completedEntriesFromError(error));
     if (batch.errors.length === 0) return;
     console.warn(`${label} parallel batch partially failed`, {
       requested: remaining,
@@ -672,27 +763,25 @@ export async function callImageGeneration(
     await runParallelSingleCalls(remaining, remaining, apiPath === "/v1/responses" ? "responses" : "images");
   } else {
     let attempt = 0;
-    const maxTransientRetries = 2;
-    const transientBackoffMs = [800, 1600];
-    const maxAttempts = targetCount + 2 + maxTransientRetries;
-    let transientRetries = 0;
-    let useSingleImagePerCall = requiresSingleImageCalls(payload);
-    while (entries.length < targetCount && attempt < maxAttempts) {
+    const maxSafeRetries = 2;
+    const safeRetryBackoffMs = [800, 1600];
+    let safeRetries = 0;
+    let terminalError: unknown;
+    while (entries.length < targetCount && attempt <= maxSafeRetries) {
       attempt += 1;
       const remaining = targetCount - entries.length;
-      const perCall = useSingleImagePerCall ? 1 : remaining;
+      const perCall = remaining;
       try {
         const produced = await runOneCall(perCall, attempt);
-        for (const e of produced) {
-          if (entries.length < targetCount) entries.push(e);
-        }
+        appendEntries(produced);
       } catch (e) {
+        appendEntries(completedEntriesFromError(e));
         const msg = e instanceof Error ? e.message : String(e);
         if (isFatalJobError(e)) {
           await deletePendingImages(entries.filter((entry) => !publishedIds.has(entry.id)));
           throw e;
         }
-        if (!useSingleImagePerCall && perCall > 1 && rejectsImageCountParameter(e)) {
+        if (perCall > 1 && rejectsImageCountParameter(e)) {
           console.warn("upstream rejected batch image count, retrying as single-image calls", {
             requested: targetCount,
             failed_attempt: attempt,
@@ -701,39 +790,31 @@ export async function callImageGeneration(
           await runParallelSingleCalls(remaining, remaining, "images fallback");
           break;
         }
-        const transient = /Upstream API error \(5\d\d\)/.test(msg) || /Upstream returned non-JSON \(5\d\d\)/.test(msg);
-        if (transient && transientRetries < maxTransientRetries) {
-          const backoffMs = transientBackoffMs[transientRetries] ?? 1600;
-          transientRetries += 1;
-          console.warn("upstream transient failure, retrying", { attempt, transientRetries, backoffMs, msg });
+        if (isRetryableParallelError(e) && safeRetries < maxSafeRetries) {
+          const backoffMs = safeRetryBackoffMs[safeRetries] ?? 1600;
+          safeRetries += 1;
+          console.warn("upstream rejected request before generation, retrying", { attempt, safeRetries, backoffMs, msg });
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
           ensureNotAborted();
           continue;
         }
-        if (useSingleImagePerCall) {
-          console.warn("single-image attempt failed, continuing batch", {
-            requested: targetCount,
-            succeeded: entries.length,
-            failed_attempt: attempt,
-            message: msg,
-          });
-          continue;
-        }
-        if (entries.length > 0) {
-          console.warn("generation batch partially failed", {
-            requested: targetCount,
-            succeeded: entries.length,
-            failed_attempt: attempt,
-            message: msg,
-          });
-          break;
-        }
-        throw e;
+        terminalError = e;
+        console.warn("generation call failed without regeneration retry", {
+          requested: targetCount,
+          succeeded: entries.length,
+          failed_attempt: attempt,
+          message: msg,
+        });
+        break;
       }
     }
+    if (entries.length === 0 && terminalError) throw terminalError;
   }
 
   if (entries.length === 0) throw new Error("Upstream produced no images");
+  if (entries.length < targetCount) {
+    throw new Error(`Generated ${entries.length} of ${targetCount} images; generation was not retried to avoid duplicate upstream images`);
+  }
   const pendingEntries = entries.filter((entry) => !publishedIds.has(entry.id));
   if (options.jobId && pendingEntries.length > 0) {
     if (!options.claimToken) {
