@@ -3084,7 +3084,12 @@
         apiFetch('/api/generate/' + encodeURIComponent(id), { method: 'DELETE' }, 'cancelling generation job'),
       ));
       let ok = 0;
-      results.forEach((r) => { if (r.status === 'fulfilled') ok++; });
+      results.forEach((r, idx) => {
+        if (r.status === 'fulfilled') {
+          ok++;
+          abortActiveGeneration(ids[idx]);
+        }
+      });
 
       jobHistoryState.cancelling = false;
       jobHistoryState.selected.clear();
@@ -4005,19 +4010,85 @@
     }
 
     const GENERATE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+    let activeGenerationRun = null;
 
-    function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+    function generationError(message, options = {}) {
+      const err = new Error(message);
+      err.jobTerminal = !!options.terminal;
+      err.generationCancelled = !!options.cancelled;
+      return err;
+    }
+
+    function abortableSleep(ms, signal) {
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason || generationError('cancelled', { terminal: true, cancelled: true }));
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(signal.reason || generationError('cancelled', { terminal: true, cancelled: true }));
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
+
+    function beginGenerationRun(jobId) {
+      const run = { jobId, controller: new AbortController() };
+      activeGenerationRun = run;
+      return run;
+    }
+
+    function finishGenerationRun(run) {
+      if (activeGenerationRun === run) activeGenerationRun = null;
+    }
+
+    function abortActiveGeneration(jobId) {
+      const stored = readActiveJob();
+      const ownsStoredJob = stored?.id === jobId;
+      const run = activeGenerationRun?.jobId === jobId ? activeGenerationRun : null;
+      if (!run && !ownsStoredJob) return false;
+
+      if (run) {
+        activeGenerationRun = null;
+        run.controller.abort(generationError('cancelled', { terminal: true, cancelled: true }));
+      }
+      if (ownsStoredJob) clearActiveJob();
+      stopElapsedTicker();
+      setLoading(false);
+      updatePreviewTime(t('preview.elapsed'));
+      resetTurnstileWidget();
+      return true;
+    }
 
     function isNetworkFetchError(err) {
       const msg = (err && err.message) || '';
       return /network/i.test(msg) || /failed to fetch/i.test(msg);
     }
 
-    function streamGenerateJob(jobId) {
+    function streamGenerateJob(jobId, signal) {
       return new Promise((resolve, reject) => {
         const ev = new EventSource('/api/generate/' + encodeURIComponent(jobId) + '/stream');
         let settled = false;
-        const cleanup = () => { if (!settled) { settled = true; ev.close(); } };
+        const cleanup = () => {
+          if (settled) return false;
+          settled = true;
+          signal?.removeEventListener('abort', onAbort);
+          ev.close();
+          return true;
+        };
+        const onAbort = () => {
+          if (cleanup()) reject(signal.reason || generationError('cancelled', { terminal: true, cancelled: true }));
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
         ev.addEventListener('running', () => {
           const loadingText = document.getElementById('previewLoadingText');
           if (loadingText) loadingText.textContent = t('preview.generating');
@@ -4031,23 +4102,23 @@
         ev.addEventListener('done', (e) => {
           try {
             const data = JSON.parse(e.data);
-            cleanup();
+            if (!cleanup()) return;
             if (data.result) resolve(data.result);
-            else reject(new Error(t('generate.errDefault')));
-          } catch (err) { cleanup(); reject(err); }
+            else reject(generationError(t('generate.errDefault'), { terminal: true }));
+          } catch (err) { if (cleanup()) reject(err); }
         });
         ev.addEventListener('error', (e) => {
           if (settled) return;
           if (e && e.data) {
             try {
               const data = JSON.parse(e.data);
-              cleanup();
-              reject(new Error(data.detail || t('generate.errDefault')));
+              if (!cleanup()) return;
+              reject(generationError(data.detail || t('generate.errDefault'), { terminal: true }));
               return;
             } catch {}
           }
-          cleanup();
-          reject(new Error(t('error.network', { action: 'image generation', msg: 'EventSource closed' })));
+          if (!cleanup()) return;
+          reject(generationError(t('error.network', { action: 'image generation', msg: 'EventSource closed' })));
         });
       });
     }
@@ -4058,21 +4129,21 @@
       return 60_000;
     }
 
-    async function pollGenerateJob(jobId) {
+    async function pollGenerateJob(jobId, signal) {
       const start = performance.now();
       const deadline = start + GENERATE_POLL_TIMEOUT_MS;
       let consecutiveNetErr = 0;
       let lastUpdatedAt = null;
       let stuckSinceMs = null;
 
-      await sleep(30_000);
-
       while (performance.now() < deadline) {
+        if (signal?.aborted) throw signal.reason;
         try {
-          const data = await apiFetch('/api/generate/' + encodeURIComponent(jobId), {}, 'image generation');
+          const data = await apiFetch('/api/generate/' + encodeURIComponent(jobId), { signal }, 'image generation');
           consecutiveNetErr = 0;
           if (data.status === 'success' && data.result) return data.result;
-          if (data.status === 'error') throw new Error(data.detail || t('generate.errDefault'));
+          if (data.status === 'success') throw generationError(t('generate.errDefault'), { terminal: true });
+          if (data.status === 'error') throw generationError(data.detail || t('generate.errDefault'), { terminal: true });
           if (data.updated_at !== lastUpdatedAt) {
             lastUpdatedAt = data.updated_at;
             stuckSinceMs = performance.now();
@@ -4083,11 +4154,12 @@
           if (loadingText) loadingText.textContent = t('preview.generating');
           updatePreviewTime(t('preview.elapsed'));
         } catch (e) {
+          if (e?.jobTerminal || e?.generationCancelled || signal?.aborted) throw e;
           if (!isNetworkFetchError(e)) throw e;
           consecutiveNetErr++;
           if (consecutiveNetErr >= 6) throw e;
         }
-        await sleep(pollIntervalMs(performance.now() - start));
+        await abortableSleep(pollIntervalMs(performance.now() - start), signal);
       }
       throw new Error(t('generate.errTimeout'));
     }
@@ -4140,6 +4212,7 @@
       setLoading(true);
       document.getElementById('previewPrompt').textContent = prompt;
       startElapsedTicker(t('preview.elapsed'));
+      let run = null;
       try {
         const submitted = await apiFetch('/api/generate', {
           method: 'POST',
@@ -4148,7 +4221,9 @@
         }, 'image generation');
         if (!submitted.job_id) throw new Error(t('generate.errDefault'));
         rememberActiveJob(submitted.job_id, prompt);
-        const result = await runJobStream(submitted.job_id);
+        run = beginGenerationRun(submitted.job_id);
+        const result = await runJobStream(submitted.job_id, run.controller.signal);
+        if (activeGenerationRun !== run) return;
         clearActiveJob();
         stopElapsedTicker();
         updatePreviewTime(t('preview.elapsed'));
@@ -4156,22 +4231,27 @@
         resetTurnstileWidget();
         setLoading(false);
       } catch (e) {
+        if (run && activeGenerationRun !== run) return;
         clearActiveJob();
         stopElapsedTicker();
         setLoading(false);
         updatePreviewTime(t('preview.elapsed'));
         resetTurnstileWidget();
-        showError(e.message || t('generate.errDefault'));
+        if (!e?.generationCancelled) showError(e.message || t('generate.errDefault'));
+      } finally {
+        if (run) finishGenerationRun(run);
       }
     }
 
-    async function runJobStream(jobId) {
+    async function runJobStream(jobId, signal) {
       try {
-        return await streamGenerateJob(jobId);
+        return await streamGenerateJob(jobId, signal);
       } catch (e) {
+        if (e?.jobTerminal || e?.generationCancelled || signal?.aborted) throw e;
+        if (!isNetworkFetchError(e)) throw e;
         // EventSource failed (network drop, server kill); fall back to polling so cron can finish the job
         console.warn('SSE failed, falling back to polling:', e?.message);
-        return await pollGenerateJob(jobId);
+        return await pollGenerateJob(jobId, signal);
       }
     }
 
@@ -4182,19 +4262,24 @@
       setLoading(true);
       document.getElementById('previewPrompt').textContent = active.prompt || '';
       startElapsedTicker(t('preview.elapsed'));
+      const run = beginGenerationRun(active.id);
       try {
-        const result = await runJobStream(active.id);
+        const result = await runJobStream(active.id, run.controller.signal);
+        if (activeGenerationRun !== run) return;
         clearActiveJob();
         stopElapsedTicker();
         updatePreviewTime(t('preview.elapsed'));
         await showGeneratedImage(result);
         setLoading(false);
       } catch (e) {
+        if (activeGenerationRun !== run) return;
         clearActiveJob();
         stopElapsedTicker();
         setLoading(false);
         updatePreviewTime(t('preview.elapsed'));
-        showError(e.message || t('generate.errDefault'));
+        if (!e?.generationCancelled) showError(e.message || t('generate.errDefault'));
+      } finally {
+        finishGenerationRun(run);
       }
     }
 
