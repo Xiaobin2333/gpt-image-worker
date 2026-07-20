@@ -4,6 +4,12 @@ import test from "node:test";
 
 const html = await readFile(new URL("../static/index.html", import.meta.url), "utf8");
 
+test("inline frontend scripts parse", () => {
+  const scripts = Array.from(html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g), (match) => match[1]);
+  assert.ok(scripts.length > 0);
+  assert.doesNotThrow(() => new Function(scripts.join("\n")));
+});
+
 function loadInlineFunction(name) {
   const match = html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?^    \\}`, "m"));
   assert.ok(match, `missing inline function ${name}`);
@@ -66,4 +72,25 @@ test("API presets restore their model list into the generation selector", () => 
   assert.match(html, /function applyModelsToHomeSelect\(models\)[\s\S]*\['gpt-image-2'\]/);
   assert.match(html, /models: parsedModels/);
   assert.match(html, /applyModelsToHomeSelect\(Array\.isArray\(session\.models\) \? session\.models : \[\]\)/);
+});
+
+test("gallery filters are forwarded across paging and bulk operations", () => {
+  for (const id of ["galleryPromptFilter", "galleryModelFilter", "galleryPresetFilter", "gallerySizeFilter", "galleryDateFromFilter", "galleryDateToFilter", "galleryFavoriteFilter"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /function buildGalleryQueryParams[\s\S]*params\.set\('prompt'[\s\S]*params\.set\('model'[\s\S]*params\.set\('preset'[\s\S]*params\.set\('size'[\s\S]*params\.set\('date_from'[\s\S]*params\.set\('date_to'[\s\S]*params\.set\('favorite'/);
+  assert.match(html, /function invertGallerySelection[\s\S]*buildGalleryQueryParams\(page, pageSize\)/);
+  assert.match(html, /function fetchAllGalleryEntries[\s\S]*buildGalleryQueryParams\(page, pageSize\)/);
+  assert.match(html, /galleryFilterDebounce = setTimeout[\s\S]*250/);
+  assert.match(html, /const sequence = \+\+galleryLoadSequence[\s\S]*sequence !== galleryLoadSequence/);
+});
+
+test("gallery favorites and file sizes are rendered", () => {
+  const formatGalleryTotalSize = loadInlineFunction("formatGalleryTotalSize");
+  assert.equal(formatGalleryTotalSize(1023), "1023 B");
+  assert.equal(formatGalleryTotalSize(1024), "1.0 KB");
+  assert.equal(formatGalleryTotalSize(1024 * 1024), "1.0 MB");
+  assert.match(html, /apiFetch\('\/api\/gallery\/' \+ encodeURIComponent\(imageId\) \+ '\/favorite'/);
+  assert.match(html, /renderLightboxFavoriteButton\(normalized\)/);
+  assert.match(html, /renderParameter\(t\('param\.byteSize'\), byteSize \|\| '—'\)/);
 });

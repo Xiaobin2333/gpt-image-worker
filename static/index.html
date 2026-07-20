@@ -1225,6 +1225,62 @@
         </div>
       </div>
 
+      <div id="galleryFilters" class="mb-5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.prompt">提示词</span>
+            <input id="galleryPromptFilter" type="search"
+              data-i18n-attr="placeholder:gallery.filter.promptPlaceholder" placeholder="搜索提示词"
+              oninput="updateGalleryFilter('prompt', this.value, { debounce: true })"
+              class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 placeholder-zinc-600 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.model">模型</span>
+            <select id="galleryModelFilter" onchange="updateGalleryFilter('model', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="" data-i18n="gallery.filter.modelAll">全部模型</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.preset">预设</span>
+            <select id="galleryPresetFilter" onchange="updateGalleryFilter('preset', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="" data-i18n="gallery.filter.presetAll">全部预设</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.size">尺寸</span>
+            <select id="gallerySizeFilter" onchange="updateGalleryFilter('size', this.value)"
+              class="h-10 w-full cursor-pointer appearance-none rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+              <option value="" data-i18n="gallery.filter.sizeAll">全部尺寸</option>
+            </select>
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block">
+              <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.dateFrom">起始</span>
+              <input id="galleryDateFromFilter" type="date" onchange="updateGalleryFilter('dateFrom', this.value)"
+                class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+            </label>
+            <label class="block">
+              <span class="mb-1.5 block text-xs font-medium text-zinc-500" data-i18n="gallery.filter.dateTo">截止</span>
+              <input id="galleryDateToFilter" type="date" onchange="updateGalleryFilter('dateTo', this.value)"
+                class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-100 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30">
+            </label>
+          </div>
+          <div class="flex items-end gap-3">
+            <label class="flex h-10 flex-1 cursor-pointer items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950/50 px-3 text-sm text-zinc-300 transition-colors hover:border-amber-300/70">
+              <input id="galleryFavoriteFilter" type="checkbox" onchange="updateGalleryFilter('favorite', this.checked)"
+                class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-400">
+              <span data-i18n="gallery.filter.favoritesOnly">仅收藏</span>
+            </label>
+            <button id="galleryResetFiltersBtn" type="button" onclick="resetGalleryFilters()"
+              class="hidden h-10 shrink-0 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100" data-i18n="gallery.filter.reset">
+              重置
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div id="galleryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <!-- Cards injected here -->
       </div>
@@ -1263,13 +1319,13 @@
               </div>
             </div>
           </div>
-          <h3 class="text-base font-semibold text-zinc-300 mb-1.5" data-i18n="gallery.emptyTitle">图库还是空的</h3>
-          <p class="text-sm text-zinc-500 max-w-xs text-center leading-relaxed" data-i18n="gallery.emptyDesc">描述你想要创作的画面，点击「生成」开始</p>
+          <h3 id="galleryEmptyTitle" class="text-base font-semibold text-zinc-300 mb-1.5" data-i18n="gallery.emptyTitle">图库还是空的</h3>
+          <p id="galleryEmptyDesc" class="text-sm text-zinc-500 max-w-xs text-center leading-relaxed" data-i18n="gallery.emptyDesc">描述你想要创作的画面，点击「生成」开始</p>
           <div class="mt-6 flex items-center gap-1.5 text-xs text-zinc-600">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
             </svg>
-            <span data-i18n="gallery.emptyHint">试试这样的提示："清晨阳光下的宁静山间湖泊"</span>
+            <span id="galleryEmptyHint" data-i18n="gallery.emptyHint">试试这样的提示："清晨阳光下的宁静山间湖泊"</span>
           </div>
         </div>
       </div>
@@ -1311,6 +1367,14 @@
               <div class="flex items-center justify-between gap-3 mb-2">
                 <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500" data-i18n="lightbox.prompt">提示词</h3>
                 <div class="flex items-center gap-2">
+                  <button id="lightboxFavoriteBtn" type="button" disabled
+                    onclick="toggleGalleryFavorite(event, this)"
+                    class="p-1.5 rounded-lg border border-zinc-800 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    data-i18n-attr="title:gallery.favoriteAdd,aria-label:gallery.favoriteAdd" title="加入收藏" aria-label="加入收藏">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.48 3.499a.6.6 0 011.04 0l2.32 4.701a.6.6 0 00.452.329l5.19.754a.6.6 0 01.333 1.023l-3.755 3.66a.6.6 0 00-.173.531l.887 5.169a.6.6 0 01-.87.632l-4.642-2.441a.6.6 0 00-.558 0l-4.642 2.441a.6.6 0 01-.87-.632l.887-5.169a.6.6 0 00-.173-.531l-3.755-3.66a.6.6 0 01.333-1.023l5.19-.754a.6.6 0 00.452-.329l2.32-4.701z"/>
+                    </svg>
+                  </button>
                   <button type="button" onclick="editFromLightbox()"
                     class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 text-xs font-medium hover:bg-emerald-600/30 transition-colors" data-i18n="lightbox.edit">
                     编辑此图
@@ -1637,6 +1701,26 @@
         'gallery.emptyTitle': '图库还是空的',
         'gallery.emptyDesc': '描述你想要创作的画面，点击「生成」开始',
         'gallery.emptyHint': '试试这样的提示："清晨阳光下的宁静山间湖泊"',
+        'gallery.emptyFilteredTitle': '没有匹配的图片',
+        'gallery.emptyFilteredDesc': '调整或重置筛选条件',
+        'gallery.emptyFilteredHint': '当前按提示词、模型、预设、尺寸、日期或收藏筛选',
+        'gallery.filter.prompt': '提示词',
+        'gallery.filter.promptPlaceholder': '搜索提示词',
+        'gallery.filter.model': '模型',
+        'gallery.filter.modelAll': '全部模型',
+        'gallery.filter.preset': '预设',
+        'gallery.filter.presetAll': '全部预设',
+        'gallery.filter.size': '尺寸',
+        'gallery.filter.sizeAll': '全部尺寸',
+        'gallery.filter.dateFrom': '起始',
+        'gallery.filter.dateTo': '截止',
+        'gallery.filter.favoritesOnly': '仅收藏',
+        'gallery.filter.reset': '重置',
+        'gallery.favoriteAdd': '加入收藏',
+        'gallery.favoriteRemove': '取消收藏',
+        'gallery.favoriteAdded': '已加入收藏',
+        'gallery.favoriteRemoved': '已取消收藏',
+        'gallery.favoriteFail': '更新收藏失败：{msg}',
         'gallery.privateBadge': '私密',
         'gallery.toggleSelect': '选择',
         'gallery.exitSelect': '取消选择',
@@ -1696,6 +1780,7 @@
         'common.notStored': '未记录',
         'param.model': '模型',
         'param.size': '尺寸',
+        'param.byteSize': '文件大小',
         'param.quality': '质量',
         'param.outputFormat': '输出格式',
         'param.outputCompression': '输出压缩',
@@ -1980,6 +2065,26 @@
         'gallery.emptyTitle': 'Your gallery is empty',
         'gallery.emptyDesc': 'Describe the image you want to create and hit Generate to get started',
         'gallery.emptyHint': 'Try a prompt like "A serene mountain lake at sunrise"',
+        'gallery.emptyFilteredTitle': 'No images match',
+        'gallery.emptyFilteredDesc': 'Adjust or reset the gallery filters.',
+        'gallery.emptyFilteredHint': 'Filtered by prompt, model, preset, size, date, or favorites',
+        'gallery.filter.prompt': 'Prompt',
+        'gallery.filter.promptPlaceholder': 'Search prompt',
+        'gallery.filter.model': 'Model',
+        'gallery.filter.modelAll': 'All models',
+        'gallery.filter.preset': 'Preset',
+        'gallery.filter.presetAll': 'All presets',
+        'gallery.filter.size': 'Size',
+        'gallery.filter.sizeAll': 'All sizes',
+        'gallery.filter.dateFrom': 'From',
+        'gallery.filter.dateTo': 'To',
+        'gallery.filter.favoritesOnly': 'Favorites only',
+        'gallery.filter.reset': 'Reset',
+        'gallery.favoriteAdd': 'Add to favorites',
+        'gallery.favoriteRemove': 'Remove from favorites',
+        'gallery.favoriteAdded': 'Added to favorites',
+        'gallery.favoriteRemoved': 'Removed from favorites',
+        'gallery.favoriteFail': 'Failed to update favorite: {msg}',
         'gallery.privateBadge': 'Private',
         'gallery.toggleSelect': 'Select',
         'gallery.exitSelect': 'Exit selection',
@@ -2039,6 +2144,7 @@
         'common.notStored': 'Not stored',
         'param.model': 'Model',
         'param.size': 'Size',
+        'param.byteSize': 'File size',
         'param.quality': 'Quality',
         'param.outputFormat': 'Output Format',
         'param.outputCompression': 'Output Compression',
@@ -2162,6 +2268,9 @@
       updatePromptLen();
       renderGalleryPagination();
       renderGalleryCount(galleryTotal);
+      renderGalleryFilterOptions(galleryFilterOptions);
+      renderGalleryFilterState();
+      renderLightboxFavoriteButton(activeLightboxImage);
       refreshReferenceTip();
       const lockEl = document.getElementById('settingsLockEnabled');
       if (lockEl) renderAccessKeyState();
@@ -2199,6 +2308,10 @@
     let galleryPage = 1;
     let galleryTotalPages = 1;
     let galleryTotal = 0;
+    let galleryFilters = { prompt: '', model: '', preset: '', size: '', dateFrom: '', dateTo: '', favorite: false };
+    let galleryFilterOptions = { models: [], presets: [], sizes: [] };
+    let galleryFilterDebounce = null;
+    let galleryLoadSequence = 0;
     let activeLightboxImage = null;
     let isAdmin = false;
     let accessRequired = false;
@@ -2470,10 +2583,11 @@
       try {
         let page = 1;
         const pageSize = 100;
-        const scope = galleryScope === 'all' ? '&scope=all' : '';
         const allIds = [];
         while (page <= 200) {
-          const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
+          const params = buildGalleryQueryParams(page, pageSize);
+          if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
+          const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
           const items = Array.isArray(data.images) ? data.images : [];
           for (const item of items) allIds.push(item.id);
           if (!data.has_next || items.length === 0) break;
@@ -2522,9 +2636,10 @@
         let page = 1;
         const pageSize = 200;
         const maxPages = 50;
-        const scope = galleryScope === 'all' ? '&scope=all' : '';
         while (page <= maxPages) {
-          const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
+          const params = buildGalleryQueryParams(page, pageSize);
+          if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
+          const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
           const items = Array.isArray(data.images) ? data.images : [];
           for (const item of items) gallerySelectedIds.add(item.id);
           if (!data.has_next || items.length === 0) break;
@@ -2588,6 +2703,7 @@
     function setGalleryScope(scope) {
       if (galleryScope === scope) return;
       galleryScope = scope;
+      clearGallerySelection();
       renderScopeButtons();
       loadGallery(1);
     }
@@ -4483,6 +4599,20 @@
       const selectHandle = `<button type="button" class="gallery-select-handle" onclick="toggleGalleryItemSelection('${escapeAttribute(img.id)}', event)" data-i18n-attr="title:gallery.toggleSelect" title="选择">
              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
            </button>`;
+      const favoriteClass = img.favorite
+        ? 'text-amber-300 border-amber-500/30 bg-amber-400/10 hover:bg-amber-400/15'
+        : 'text-zinc-300 border-zinc-700/80 bg-zinc-950/80 hover:text-amber-300 hover:border-amber-300/70 hover:bg-zinc-900';
+      const favoriteTitle = img.favorite ? t('gallery.favoriteRemove') : t('gallery.favoriteAdd');
+      const favoriteBtn = `<button type="button"
+             onclick="toggleGalleryFavorite(event, this)"
+             data-image-id="${escapedImageIdAttr}"
+             data-favorite="${img.favorite ? 'true' : 'false'}"
+             class="absolute right-2 top-2 z-10 p-1.5 rounded-lg border transition-colors ${favoriteClass}"
+             title="${escapeAttribute(favoriteTitle)}" aria-label="${escapeAttribute(favoriteTitle)}">
+             <svg class="w-3.5 h-3.5" fill="${img.favorite ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11.48 3.499a.6.6 0 011.04 0l2.32 4.701a.6.6 0 00.452.329l5.19.754a.6.6 0 01.333 1.023l-3.755 3.66a.6.6 0 00-.173.531l.887 5.169a.6.6 0 01-.87.632l-4.642-2.441a.6.6 0 00-.558 0l-4.642 2.441a.6.6 0 01-.87-.632l.887-5.169a.6.6 0 00-.173-.531l-3.755-3.66a.6.6 0 01.333-1.023l5.19-.754a.6.6 0 00.452-.329l2.32-4.701z"/>
+             </svg>
+           </button>`;
       const selectedClass = gallerySelectedIds.has(img.id) ? ' is-selected' : '';
       return `
         <div class="gallery-card bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden${selectedClass}" data-gallery-card="${escapedImageIdAttr}">
@@ -4491,6 +4621,7 @@
             <img src="${escapeAttribute(previewSrc)}" alt="${escapedPromptAttr}"
               class="w-full aspect-square object-cover bg-zinc-800" loading="lazy">
             ${privateBadge}
+            ${favoriteBtn}
             <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
               <span class="text-xs text-white truncate">${escapedShortPrompt}</span>
             </div>
@@ -4554,6 +4685,7 @@
       if (!result || !Array.isArray(result.images) || result.images.length === 0) return false;
       if (galleryPage !== 1) return false;
       if (isAdmin && galleryScope === 'all') return false;
+      if (hasGalleryFilters()) return false;
 
       const newEntries = result.images.map((entry) => normalizeGalleryImage({
         id: entry.id,
@@ -4600,19 +4732,21 @@
 
     async function loadGallery(page = galleryPage, options = {}) {
       const { throwOnError = false } = options;
+      const sequence = ++galleryLoadSequence;
       try {
-        const params = new URLSearchParams({
-          page: String(page),
-          page_size: String(GALLERY_PAGE_SIZE),
-        });
+        const params = buildGalleryQueryParams(page);
         if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
         const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
+        if (sequence !== galleryLoadSequence) return;
 
         galleryPage = data.page || 1;
         galleryTotalPages = data.total_pages || 1;
         galleryTotal = data.total || 0;
 
         renderGalleryCount(galleryTotal);
+        galleryFilterOptions = data.filter_options || { models: [], presets: [], sizes: [] };
+        renderGalleryFilterOptions(galleryFilterOptions);
+        renderGalleryFilterState();
         renderGalleryPagination(data);
 
         if (!data.images || data.images.length === 0) {
@@ -4625,15 +4759,148 @@
         galleryById = new Map(items.map((img) => [img.id, img]));
         applyGalleryItemsToDom(items);
       } catch (e) {
+        if (sequence !== galleryLoadSequence) return;
         console.error('Failed to load gallery:', e);
         if (throwOnError) throw e;
       }
+    }
+
+    function buildGalleryQueryParams(page, pageSize = GALLERY_PAGE_SIZE) {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+      });
+      const prompt = (galleryFilters.prompt || '').trim();
+      if (prompt) params.set('prompt', prompt);
+      if (galleryFilters.model) params.set('model', galleryFilters.model);
+      if (galleryFilters.preset) params.set('preset', galleryFilters.preset);
+      if (galleryFilters.size) params.set('size', galleryFilters.size);
+      if (galleryFilters.dateFrom) params.set('date_from', galleryFilters.dateFrom);
+      if (galleryFilters.dateTo) params.set('date_to', galleryFilters.dateTo);
+      if (galleryFilters.favorite) params.set('favorite', 'true');
+      return params;
+    }
+
+    function hasGalleryFilters() {
+      return Boolean(
+        (galleryFilters.prompt || '').trim() ||
+        galleryFilters.model ||
+        galleryFilters.preset ||
+        galleryFilters.size ||
+        galleryFilters.dateFrom ||
+        galleryFilters.dateTo ||
+        galleryFilters.favorite
+      );
     }
 
     function renderGalleryCount(total) {
       const count = document.getElementById('galleryCount');
       count.textContent = total > 0 ? t('gallery.count', { n: total }) : '';
     }
+
+    function formatGalleryTotalSize(bytes) {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value <= 0) return '';
+      if (value < 1024) return value + ' B';
+      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+      if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB';
+      return (value / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    function renderGalleryFilterState() {
+      const resetBtn = document.getElementById('galleryResetFiltersBtn');
+      const emptyTitle = document.getElementById('galleryEmptyTitle');
+      const emptyDesc = document.getElementById('galleryEmptyDesc');
+      const emptyHint = document.getElementById('galleryEmptyHint');
+      const filtered = hasGalleryFilters();
+      if (resetBtn) resetBtn.classList.toggle('hidden', !filtered);
+      if (!emptyTitle || !emptyDesc || !emptyHint) return;
+      emptyTitle.textContent = t(filtered ? 'gallery.emptyFilteredTitle' : 'gallery.emptyTitle');
+      emptyDesc.textContent = t(filtered ? 'gallery.emptyFilteredDesc' : 'gallery.emptyDesc');
+      emptyHint.textContent = t(filtered ? 'gallery.emptyFilteredHint' : 'gallery.emptyHint');
+    }
+
+    function renderGalleryFilterOptions(options) {
+      updateGallerySelectOptions('galleryModelFilter', options.models || [], galleryFilters.model, t('gallery.filter.modelAll'));
+      updateGallerySelectOptions('galleryPresetFilter', options.presets || [], galleryFilters.preset, t('gallery.filter.presetAll'));
+      updateGallerySelectOptions('gallerySizeFilter', options.sizes || [], galleryFilters.size, t('gallery.filter.sizeAll'));
+    }
+
+    function updateGallerySelectOptions(id, values, selectedValue, emptyLabel) {
+      const select = document.getElementById(id);
+      if (!select) return;
+      const normalized = Array.from(new Set((values || []).filter(Boolean).map(String)));
+      if (selectedValue && !normalized.includes(selectedValue)) normalized.unshift(selectedValue);
+      select.innerHTML = ['<option value="">' + escapeHtml(emptyLabel) + '</option>']
+        .concat(normalized.map((value) => {
+          const selected = value === selectedValue ? ' selected' : '';
+          return '<option value="' + escapeAttribute(value) + '"' + selected + '>' + escapeHtml(value) + '</option>';
+        }))
+        .join('');
+    }
+
+    function updateGalleryFilter(key, value, options = {}) {
+      if (!Object.prototype.hasOwnProperty.call(galleryFilters, key)) return;
+      galleryFilters = {
+        ...galleryFilters,
+        [key]: key === 'favorite' ? Boolean(value) : String(value || ''),
+      };
+      clearGallerySelection();
+      if (galleryFilterDebounce) clearTimeout(galleryFilterDebounce);
+      galleryFilterDebounce = null;
+      if (options.debounce) {
+        galleryFilterDebounce = setTimeout(() => {
+          galleryFilterDebounce = null;
+          loadGallery(1);
+        }, 250);
+        renderGalleryFilterState();
+        return;
+      }
+      loadGallery(1);
+    }
+
+    function resetGalleryFilters() {
+      if (galleryFilterDebounce) clearTimeout(galleryFilterDebounce);
+      galleryFilterDebounce = null;
+      galleryFilters = { prompt: '', model: '', preset: '', size: '', dateFrom: '', dateTo: '', favorite: false };
+      ['galleryPromptFilter', 'galleryModelFilter', 'galleryPresetFilter', 'gallerySizeFilter', 'galleryDateFromFilter', 'galleryDateToFilter']
+        .forEach((id) => { const input = document.getElementById(id); if (input) input.value = ''; });
+      const favorite = document.getElementById('galleryFavoriteFilter');
+      if (favorite) favorite.checked = false;
+      clearGallerySelection();
+      loadGallery(1);
+    }
+
+    async function toggleGalleryFavorite(event, button) {
+      if (event) event.stopPropagation();
+      const imageId = button.dataset.imageId || '';
+      const next = button.dataset.favorite !== 'true';
+      if (!imageId) return;
+      button.disabled = true;
+      try {
+        const updated = await apiFetch('/api/gallery/' + encodeURIComponent(imageId) + '/favorite', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ favorite: next }),
+        }, 'updating favorite');
+        const normalized = normalizeGalleryImage(updated);
+        galleryById.set(normalized.id, normalized);
+        if (activeLightboxImage && activeLightboxImage.id === normalized.id) {
+          activeLightboxImage = normalized;
+          renderLightboxFavoriteButton(normalized);
+        }
+        await loadGallery(galleryPage);
+        showToast(t(next ? 'gallery.favoriteAdded' : 'gallery.favoriteRemoved'), 'success');
+      } catch (error) {
+        showToast(t('gallery.favoriteFail', { msg: error.message }), 'error');
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    window.updateGalleryFilter = updateGalleryFilter;
+    window.resetGalleryFilters = resetGalleryFilters;
+    window.toggleGalleryFavorite = toggleGalleryFavorite;
 
     async function editImageFromGallery(id) {
       const meta = galleryById.get(id);
@@ -4810,9 +5077,10 @@
       const allEntries = [];
       let page = 1;
       const pageSize = 100;
-      const scope = isAdmin && galleryScope === 'all' ? '&scope=all' : '';
       while (true) {
-        const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
+        const params = buildGalleryQueryParams(page, pageSize);
+        if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
+        const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
         const items = Array.isArray(data.images) ? data.images : [];
         allEntries.push(...items);
         if (!data.has_next || items.length === 0) break;
@@ -4833,9 +5101,10 @@
 
       let page = 1;
       const pageSize = 100;
-      const scope = isAdmin && galleryScope === 'all' ? '&scope=all' : '';
       while (found.size < seen.size && page <= 200) {
-        const data = await apiFetch(`/api/gallery?page=${page}&page_size=${pageSize}${scope}`, {}, 'loading gallery');
+        const params = buildGalleryQueryParams(page, pageSize);
+        if (isAdmin && galleryScope === 'all') params.set('scope', 'all');
+        const data = await apiFetch('/api/gallery?' + params.toString(), {}, 'loading gallery');
         const items = Array.isArray(data.images) ? data.images : [];
         for (const item of items) {
           if (seen.has(item.id) && !found.has(item.id)) found.set(item.id, item);
@@ -4951,6 +5220,8 @@
         image_height: height,
         image_dimensions_loaded: !!(width && height),
         duration: img.duration || null,
+        byte_size: Number.isFinite(Number(img.byte_size)) ? Number(img.byte_size) : null,
+        favorite: Boolean(img.favorite),
         is_public: img.is_public !== false,
       };
     }
@@ -5221,9 +5492,11 @@
       const publicValue = image.is_public === false ? t('param.public.no') : t('param.public.yes');
       const parts = [];
       if (image.duration) parts.push(renderParameter(t('param.duration'), image.duration));
+      const byteSize = formatGalleryTotalSize(image.byte_size);
       parts.push(
         renderParameter(t('param.model'), image.model),
         renderParameter(t('param.size'), formatImageResolution(image)),
+        renderParameter(t('param.byteSize'), byteSize || '—'),
         renderParameter(t('param.quality'), image.quality),
         renderParameter(t('param.outputFormat'), image.output_format),
         renderParameter(t('param.outputCompression'), image.output_compression),
@@ -5258,6 +5531,7 @@
       };
       lightboxImg.src = image.image_url || ('/api/image/' + image.filename);
       lightboxImg.alt = image.prompt || '';
+      renderLightboxFavoriteButton(image);
       document.getElementById('lightboxPrompt').textContent = image.prompt || t('common.notStored');
       const localeStr = currentLang === 'zh' ? 'zh-CN' : 'en-US';
       document.getElementById('lightboxCreatedAt').textContent = image.created_at
@@ -5281,10 +5555,31 @@
       lightboxImg.onerror = null;
       document.getElementById('lightbox').classList.add('hidden');
       lightboxImg.removeAttribute('src');
+      renderLightboxFavoriteButton(null);
       activeLightboxImage = null;
       lightboxZoom.scale = 1; lightboxZoom.tx = 0; lightboxZoom.ty = 0;
       applyLightboxTransform();
       document.body.style.overflow = '';
+    }
+
+    function renderLightboxFavoriteButton(image) {
+      const button = document.getElementById('lightboxFavoriteBtn');
+      if (!button) return;
+      const favorite = Boolean(image?.favorite);
+      button.dataset.imageId = image?.id || '';
+      button.dataset.favorite = favorite ? 'true' : 'false';
+      button.disabled = !image?.id;
+      const title = t(favorite ? 'gallery.favoriteRemove' : 'gallery.favoriteAdd');
+      button.title = title;
+      button.setAttribute('aria-label', title);
+      button.classList.toggle('text-amber-300', favorite);
+      button.classList.toggle('bg-amber-400/10', favorite);
+      button.classList.toggle('border-amber-500/30', favorite);
+      button.classList.toggle('text-zinc-300', !favorite);
+      button.classList.toggle('bg-zinc-800', !favorite);
+      button.classList.toggle('border-zinc-800', !favorite);
+      const icon = button.querySelector('svg');
+      if (icon) icon.setAttribute('fill', favorite ? 'currentColor' : 'none');
     }
 
     function escapeHtml(str) {
