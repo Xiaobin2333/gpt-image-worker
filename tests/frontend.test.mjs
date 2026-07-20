@@ -41,3 +41,10 @@ test("mask requests normalize references and reject Responses mode", () => {
   assert.match(html, /isResponsesApiSelected\(\) && referenceImages\.length > 0/);
   assert.match(html, /referenceMaskDataUrl = null;\s*referenceImages = \[\{ name: meta\.filename, dataUrl \}\]/);
 });
+
+test("preview loading has a deadline and clears recovery state after rendering", () => {
+  assert.match(html, /const PREVIEW_IMAGE_LOAD_TIMEOUT_MS = 30_000/);
+  assert.match(html, /setTimeout\(loadError, PREVIEW_IMAGE_LOAD_TIMEOUT_MS\)/);
+  assert.match(html, /await showGeneratedImage\(result\);\s*clearActiveJob\(\)/);
+  assert.match(html, /if \(!e\?\.previewLoadFailed\) clearActiveJob\(\)/);
+});
