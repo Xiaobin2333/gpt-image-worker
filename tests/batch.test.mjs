@@ -91,12 +91,6 @@ test("incomplete image batches stay terminal after completed images are retained
   assert.match(proxy, /if \(entries\.length < targetCount\) \{[\s\S]*generation was not retried to avoid duplicate upstream images/);
 });
 
-test("Images API falls back when the upstream rejects tools[0].n", async () => {
-  assert.match(proxy, /function requiresSingleImageCalls[\s\S]*\^gpt-image-2[\s\S]*\.test\(payload\.model\.trim\(\)\)/);
-  assert.match(proxy, /if \(perCall > 1 && rejectsImageCountParameter\(e\)\) \{[\s\S]*runParallelSingleCalls\(remaining, remaining, "images fallback"\)[\s\S]*break;/);
-  assert.match(proxy, /const perCall = remaining/);
-});
-
 test("Responses API uses an image_generation tool payload", () => {
   const buildResponsesPayload = loadBuildResponsesPayload();
   const payload = {
@@ -147,9 +141,11 @@ test("Responses API uses an image_generation tool payload", () => {
   assert.equal("n" in withReferences.tools[0], false);
 });
 
-test("single-image paths use the requested quantity as their concurrency", () => {
+test("every multi-image Images request is split into parallel single-image calls", () => {
   assert.match(proxy, /if \(apiPath === "\/v1\/responses" \|\| parallelImages\)[\s\S]*runParallelSingleCalls\(remaining, remaining/);
-  assert.match(proxy, /const parallelImages = apiPath === "\/v1\/images\/generations"\s*&& requiresSingleImageCalls\(payload\)/);
+  assert.match(proxy, /const parallelImages = apiPath === "\/v1\/images\/generations" && targetCount > 1/);
+  assert.match(proxy, /runOneCall\(1, index \+ 1/);
+  assert.doesNotMatch(proxy, /rejectsImageCountParameter|requiresSingleImageCalls|images fallback/);
   assert.doesNotMatch(proxy, /responsesConcurrency/);
 });
 

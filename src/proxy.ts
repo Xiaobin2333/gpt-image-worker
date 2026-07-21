@@ -430,15 +430,6 @@ function upstreamErrorMessage(parsed: { status: number; json?: Record<string, un
   return `Upstream API error (${parsed.status}): ${parsed.text.slice(0, 200)}`;
 }
 
-function rejectsImageCountParameter(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /Upstream API error \(400\):\s*Unknown parameter:\s*['"]tools\[0\]\.n['"]/i.test(message);
-}
-
-function requiresSingleImageCalls(payload: GenerateRequestBody): boolean {
-  return !!payload.mask || /^gpt-image-2(?:$|[-.:/_])/i.test(payload.model.trim());
-}
-
 function isRetryableParallelError(error: unknown): boolean {
   return error instanceof UpstreamRequestError
     && (error.status === 425 || error.status === 429);
@@ -787,8 +778,7 @@ export async function callImageGeneration(
     throw new Error(`Generated ${entries.length} of ${targetCount} images; ${batch.errors.length} calls failed: ${messages.join("; ")}`);
   };
 
-  const parallelImages = apiPath === "/v1/images/generations"
-    && requiresSingleImageCalls(payload);
+  const parallelImages = apiPath === "/v1/images/generations" && targetCount > 1;
   if (apiPath === "/v1/responses" || parallelImages) {
     const remaining = targetCount - entries.length;
     await runParallelSingleCalls(remaining, remaining, apiPath === "/v1/responses" ? "responses" : "images");
@@ -811,15 +801,6 @@ export async function callImageGeneration(
         if (isFatalJobError(e)) {
           await deletePendingImages(entries.filter((entry) => !publishedIds.has(entry.id)));
           throw e;
-        }
-        if (perCall > 1 && rejectsImageCountParameter(e)) {
-          console.warn("upstream rejected batch image count, retrying as single-image calls", {
-            requested: targetCount,
-            failed_attempt: attempt,
-            message: msg,
-          });
-          await runParallelSingleCalls(remaining, remaining, "images fallback");
-          break;
         }
         if (isRetryableParallelError(e) && safeRetries < maxSafeRetries) {
           const backoffMs = safeRetryBackoffMs[safeRetries] ?? 1600;
