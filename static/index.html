@@ -3838,9 +3838,9 @@
     const ACTIVE_JOB_KEY = 'gpt_image_active_job';
     const OWNER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    function rememberActiveJob(jobId, prompt) {
+    function rememberActiveJob(jobId, prompt, startedAt = Date.now()) {
       try {
-        localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ id: jobId, prompt: prompt || '', t: Date.now() }));
+        localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ id: jobId, prompt: prompt || '', t: startedAt }));
       } catch {}
     }
     function readActiveJob() {
@@ -4556,8 +4556,29 @@
       }
     }
 
+    async function findRestorableJob() {
+      const stored = readActiveJob();
+      if (stored) return stored;
+
+      try {
+        const jobs = await apiFetch('/api/generate/jobs', {}, 'restoring generation job');
+        const candidates = (Array.isArray(jobs) ? jobs : [])
+          .filter((job) => ACTIVE_JOB_STATUSES.has(job.status) && (!isAdmin || job.is_owner))
+          .sort((a, b) => Date.parse(a.created_at || '') - Date.parse(b.created_at || ''));
+        const job = candidates[0];
+        if (!job?.job_id || !OWNER_ID_RE.test(job.job_id)) return null;
+        const createdAt = Date.parse(job.created_at || '');
+        const startedAt = Number.isFinite(createdAt) ? createdAt : Date.now();
+        rememberActiveJob(job.job_id, job.prompt || '', startedAt);
+        return { id: job.job_id, prompt: job.prompt || '', t: startedAt };
+      } catch (error) {
+        console.warn('Failed to restore server generation job:', error?.message || error);
+        return null;
+      }
+    }
+
     async function resumeActiveJobIfAny() {
-      const active = readActiveJob();
+      const active = await findRestorableJob();
       if (!active) return;
       generationStartedAt = performance.now() - Math.max(0, Date.now() - active.t);
       setLoading(true);

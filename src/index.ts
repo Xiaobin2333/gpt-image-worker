@@ -926,6 +926,7 @@ app.get("/api/generate/jobs", async (c) => {
       api_preset_name: job.payload?.snapshot?.api_preset_name || undefined,
       created_at: job.created_at,
       updated_at: job.updated_at,
+      is_owner: !!owner && job.owner_id === owner,
     };
   });
   c.header("Cache-Control", "no-store");
@@ -999,6 +1000,31 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           });
         }
       };
+      const executeStreamClaim = async (activeClaim: GenerateJob): Promise<boolean> => {
+        const claimToken = activeClaim.claim_token;
+        if (!claimToken) {
+          sendEvent("error", { detail: "Generation claim token missing" });
+          return true;
+        }
+
+        sendEvent("running", { updated_at: activeClaim.updated_at });
+        const outcome = await executeClaimedJob(
+          env,
+          activeClaim,
+          claimToken,
+          "stream",
+          (result, completed) => emitResultImages(result, completed),
+        );
+        if (outcome.status === "success") {
+          sendEvent("done", { result: outcome.result });
+          return true;
+        }
+        if (outcome.status === "error") {
+          sendEvent("error", { detail: outcome.detail });
+          return true;
+        }
+        return false;
+      };
       const followClaimedJob = async (reason: string) => {
         sendEvent("waiting", { reason });
         const deadline = Date.now() + 6 * 60 * 1000;
@@ -1008,14 +1034,23 @@ app.get("/api/generate/:jobId/stream", async (c) => {
             sendEvent("error", { detail: "Job not found or expired" });
             return;
           }
-          await emitProducedImages(current);
           if (current.status === "success" && current.result) {
+            await emitProducedImages(current);
             sendEvent("done", { result: current.result });
             return;
           }
           if (current.status === "error") {
+            await emitProducedImages(current);
             sendEvent("error", { detail: current.detail ?? "unknown" });
             return;
+          }
+          const reclaimed = await tryClaimJob(env, jobId);
+          if (reclaimed) {
+            const terminal = await executeStreamClaim(reclaimed);
+            if (terminal) return;
+            sendEvent("waiting", { reason: "job-lease-lost" });
+          } else {
+            await emitProducedImages(current);
           }
           await new Promise((resolve) => setTimeout(resolve, 2_000));
         }
@@ -1036,23 +1071,8 @@ app.get("/api/generate/:jobId/stream", async (c) => {
           await followClaimedJob("another-worker-running");
           return;
         }
-        const claimToken = claimed.claim_token;
-        if (!claimToken) {
-          sendEvent("error", { detail: "Generation claim token missing" });
-          return;
-        }
-
-        sendEvent("running", { updated_at: claimed.updated_at });
-        const outcome = await executeClaimedJob(
-          env,
-          claimed,
-          claimToken,
-          "stream",
-          (result, completed) => emitResultImages(result, completed),
-        );
-        if (outcome.status === "success") sendEvent("done", { result: outcome.result });
-        else if (outcome.status === "error") sendEvent("error", { detail: outcome.detail });
-        else await followClaimedJob("job-lease-lost");
+        const terminal = await executeStreamClaim(claimed);
+        if (!terminal) await followClaimedJob("job-lease-lost");
       } finally {
         clearInterval(heartbeat);
         close();

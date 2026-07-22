@@ -108,6 +108,16 @@ test("active job cleanup is compare-and-delete and gallery refresh is background
   assert.doesNotMatch(html, /await loadGallery\(1, \{ throwOnError: true \}\)/);
 });
 
+test("page reload restores queued jobs from the server when local state is missing", () => {
+  const restoreSource = inlineFunctionSource("findRestorableJob");
+  assert.match(restoreSource, /readActiveJob\(\)/);
+  assert.match(restoreSource, /apiFetch\('\/api\/generate\/jobs'/);
+  assert.match(restoreSource, /ACTIVE_JOB_STATUSES\.has\(job\.status\)/);
+  assert.match(restoreSource, /!isAdmin \|\| job\.is_owner/);
+  assert.match(restoreSource, /rememberActiveJob\(job\.job_id, job\.prompt \|\| '', startedAt\)/);
+  assert.match(html, /async function resumeActiveJobIfAny\(\)[\s\S]*await findRestorableJob\(\)/);
+});
+
 test("API presets restore their model list into the generation selector", () => {
   assert.match(html, /id="settingsModels"/);
   assert.match(html, /function parseModelsTextarea\(\)[\s\S]*MODEL_NAME_RE[\s\S]*out\.length < 50/);
